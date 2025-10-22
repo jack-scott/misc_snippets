@@ -163,7 +163,7 @@ class MerkleTreeComparator:
                 self.stats.identical_files += 1
 
             if show_identical:
-                prefix = f"{indent}{status_symbol} "
+                prefix = f"{indent}{status_symbol} " 
                 if source_node.is_dir:
                     output.append(f"{prefix}{source_node.name}/ ({source_node.file_count:,} files) [identical]")
                 elif not only_show_dirs:
