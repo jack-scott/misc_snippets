@@ -1,0 +1,12 @@
+[workspace]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "life"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+mojo = ">=0.25.7.0.dev2025101205,<0.26"
+python = ">=3.11,<3.13"
+pygame = ">=2.6.1,<3"
