@@ -1,0 +1,18 @@
+[workspace]
+name = "favicon_fetcher"
+version = "0.1.0"
+description = "Fetch favicons from websites with fallback image report"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.9"
+requests = ">=2.31.0"
+pip = "*"
+
+[pypi-dependencies]
+justhtml = ">=0.1.0"
+pillow = ">=10.0.0"
+
+[tasks]
+fetch = { cmd = "python favicon_fetcher.py" }
