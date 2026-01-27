@@ -144,3 +144,5 @@ To rebuild
 rm pixi.lock && pixi install
 ```
 You can then check the source of the cadvisor package using `pixi list`
+
+![prefix.dev](../resources/prefix_dev_screenshot.png)
