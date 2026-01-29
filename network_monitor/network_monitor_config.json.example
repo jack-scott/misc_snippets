@@ -1,0 +1,23 @@
+{
+  "subdomains": [
+    "google.com",
+    "github.com",
+    "cloudflare.com"
+  ],
+  "devices": [
+    {
+      "name": "Router",
+      "ip": "192.168.1.1",
+      "hostname": ""
+    },
+    {
+      "name": "Home Server",
+      "hostname": "server.local",
+      "ip": ""
+    }
+  ],
+  "subnets": [
+    "192.168.1.0/24"
+  ],
+  "mac_friendly_names": {}
+}

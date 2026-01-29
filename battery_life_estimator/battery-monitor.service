@@ -1,0 +1,18 @@
+[Unit]
+Description=Battery Monitor Service
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/battery_monitor_service
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+# Run with low priority to minimize system impact
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

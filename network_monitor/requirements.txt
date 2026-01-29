@@ -1,0 +1,5 @@
+# Network interface detection
+netifaces>=0.11.0
+
+# MAC address vendor lookup
+mac-vendor-lookup>=0.1.15

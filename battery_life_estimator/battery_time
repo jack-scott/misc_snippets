@@ -1,0 +1,548 @@
+#!/usr/bin/env python3
+"""
+battery_time - Analyze battery statistics and predict remaining time
+
+Usage:
+    battery_time         # Show estimated time remaining
+    battery_time -v      # Verbose mode with detailed statistics
+    battery_time -g      # Graph mode with visual battery data
+"""
+
+import sys
+import argparse
+import csv
+from pathlib import Path
+from datetime import datetime, timedelta
+from collections import defaultdict
+import subprocess
+
+# Configuration
+LOG_DIR = Path.home() / ".local" / "share" / "battery_monitor"
+LOG_FILE = "battery_statistics.csv"
+
+
+def get_current_battery_info():
+    """Get current battery state from sysfs"""
+    power_supply_dir = Path("/sys/class/power_supply")
+    battery_dirs = list(power_supply_dir.glob("BAT*"))
+
+    if not battery_dirs:
+        return None
+
+    battery_dir = battery_dirs[0]
+
+    try:
+        status_file = battery_dir / "status"
+        status = status_file.read_text().strip() if status_file.exists() else "Unknown"
+
+        capacity_file = battery_dir / "capacity"
+        battery_percent = int(capacity_file.read_text().strip()) if capacity_file.exists() else 0
+
+        energy_now_file = battery_dir / "energy_now"
+        voltage_now_file = battery_dir / "voltage_now"
+        power_now_file = battery_dir / "power_now"
+
+        energy_now_uwh = int(energy_now_file.read_text().strip()) if energy_now_file.exists() else 0
+        voltage_now_uv = int(voltage_now_file.read_text().strip()) if voltage_now_file.exists() else 1
+        power_now_uw = int(power_now_file.read_text().strip()) if power_now_file.exists() else 0
+
+        energy_now_wh = energy_now_uwh / 1_000_000
+        voltage_now_v = voltage_now_uv / 1_000_000
+        power_now_w = power_now_uw / 1_000_000
+
+        if voltage_now_v > 0:
+            energy_now_mah = (energy_now_wh / voltage_now_v) * 1000
+        else:
+            energy_now_mah = 0
+
+        return {
+            "status": status,
+            "battery_percent": battery_percent,
+            "energy_now_mah": round(energy_now_mah, 2),
+            "energy_now_wh": round(energy_now_wh, 2),
+            "power_draw_watts": round(power_now_w, 2),
+            "voltage_volts": round(voltage_now_v, 2)
+        }
+
+    except (FileNotFoundError, ValueError, ZeroDivisionError):
+        return None
+
+
+def get_power_profile():
+    """Get current power profile"""
+    try:
+        result = subprocess.run(
+            ["powerprofilesctl", "get"],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "unknown"
+
+
+def load_battery_data():
+    """Load battery statistics from CSV"""
+    log_file = LOG_DIR / LOG_FILE
+
+    if not log_file.exists():
+        return []
+
+    data = []
+    try:
+        with open(log_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Parse timestamp
+                row['timestamp_dt'] = datetime.fromisoformat(row['timestamp'])
+                # Convert numeric fields
+                row['battery_percent'] = float(row['battery_percent'])
+                row['time_remaining_hours'] = float(row['time_remaining_hours'])
+                row['energy_now_mah'] = float(row['energy_now_mah'])
+                row['power_draw_watts'] = float(row['power_draw_watts'])
+                row['voltage_volts'] = float(row['voltage_volts'])
+                data.append(row)
+    except Exception as e:
+        print(f"Error loading data: {e}", file=sys.stderr)
+        return []
+
+    return data
+
+
+def calculate_real_power_draw(data):
+    """
+    Calculate real power draw by measuring actual battery drain over time.
+    This is more accurate than instantaneous power_now readings.
+    """
+    profile_stats = defaultdict(lambda: {
+        'power_draws': [],
+        'measured_draws': [],
+        'durations': []
+    })
+
+    # Sort by timestamp
+    data = sorted(data, key=lambda x: x['timestamp_dt'])
+
+    # Calculate measured power draw between consecutive readings
+    for i in range(len(data) - 1):
+        curr = data[i]
+        next_reading = data[i + 1]
+
+        # Only compare within same power profile
+        if curr['power_profile'] != next_reading['power_profile']:
+            continue
+
+        # Calculate time difference in hours
+        time_diff = (next_reading['timestamp_dt'] - curr['timestamp_dt']).total_seconds() / 3600
+
+        # Skip if time gap is too large (more than 15 minutes)
+        if time_diff > 0.25:  # 15 minutes
+            continue
+
+        # Calculate energy consumed (in Wh)
+        energy_consumed_mah = curr['energy_now_mah'] - next_reading['energy_now_mah']
+        voltage_avg = (curr['voltage_volts'] + next_reading['voltage_volts']) / 2
+        energy_consumed_wh = (energy_consumed_mah / 1000) * voltage_avg
+
+        # Calculate measured power draw
+        if time_diff > 0:
+            measured_power_w = energy_consumed_wh / time_diff
+
+            # Only include positive, reasonable values
+            if 0 < measured_power_w < 200:  # Sanity check
+                profile = curr['power_profile']
+                profile_stats[profile]['power_draws'].append(curr['power_draw_watts'])
+                profile_stats[profile]['measured_draws'].append(measured_power_w)
+                profile_stats[profile]['durations'].append(time_diff)
+
+    # Calculate statistics for each profile
+    results = {}
+    for profile, stats in profile_stats.items():
+        if stats['measured_draws']:
+            avg_reported = sum(stats['power_draws']) / len(stats['power_draws'])
+            avg_measured = sum(stats['measured_draws']) / len(stats['measured_draws'])
+            total_time = sum(stats['durations'])
+
+            results[profile] = {
+                'avg_reported_watts': round(avg_reported, 2),
+                'avg_measured_watts': round(avg_measured, 2),
+                'accuracy_percent': round((avg_reported / avg_measured * 100) if avg_measured > 0 else 0, 1),
+                'sample_count': len(stats['measured_draws']),
+                'total_hours': round(total_time, 2)
+            }
+
+    return results
+
+
+def calculate_power_draw_distribution(data):
+    """
+    Calculate the distribution of time spent at different power draw levels,
+    broken down by power profile.
+    """
+    # Define power draw buckets (in watts)
+    buckets = [
+        (0, 5, "0-5W"),
+        (5, 10, "5-10W"),
+        (10, 15, "10-15W"),
+        (15, 20, "15-20W"),
+        (20, 30, "20-30W"),
+        (30, 50, "30-50W"),
+        (50, float('inf'), "50W+")
+    ]
+
+    profile_distributions = defaultdict(lambda: defaultdict(float))
+    profile_totals = defaultdict(float)
+
+    # Sort by timestamp
+    data = sorted(data, key=lambda x: x['timestamp_dt'])
+
+    # Calculate time spent at each power level
+    for i in range(len(data) - 1):
+        curr = data[i]
+        next_reading = data[i + 1]
+
+        # Calculate time difference in hours
+        time_diff = (next_reading['timestamp_dt'] - curr['timestamp_dt']).total_seconds() / 3600
+
+        # Skip if time gap is too large (more than 15 minutes)
+        if time_diff > 0.25:  # 15 minutes
+            continue
+
+        profile = curr['power_profile']
+        power = curr['power_draw_watts']
+
+        # Find the appropriate bucket
+        for min_w, max_w, label in buckets:
+            if min_w <= power < max_w:
+                profile_distributions[profile][label] += time_diff
+                profile_totals[profile] += time_diff
+                break
+
+    # Convert to percentages
+    results = {}
+    for profile, distribution in profile_distributions.items():
+        total = profile_totals[profile]
+        if total > 0:
+            results[profile] = {
+                'percentages': {
+                    label: round((time / total) * 100, 1)
+                    for label, time in distribution.items()
+                },
+                'hours': {
+                    label: round(time, 2)
+                    for label, time in distribution.items()
+                },
+                'total_hours': round(total, 2),
+                'bucket_order': [label for _, _, label in buckets]
+            }
+
+    return results
+
+
+def estimate_battery_life(current_info, power_stats, current_profile):
+    """
+    Estimate battery life based on historical measured power consumption
+    """
+    if current_profile not in power_stats:
+        # Fallback to system estimate if no data for current profile
+        if current_info['power_draw_watts'] > 0:
+            hours = current_info['energy_now_wh'] / current_info['power_draw_watts']
+            return {
+                'hours': round(hours, 2),
+                'minutes': round(hours * 60, 0),
+                'method': 'system_instant',
+                'confidence': 'low'
+            }
+        return None
+
+    # Use measured average power draw for current profile
+    avg_power = power_stats[current_profile]['avg_measured_watts']
+
+    if avg_power > 0:
+        hours = current_info['energy_now_wh'] / avg_power
+        confidence = 'high' if power_stats[current_profile]['sample_count'] > 10 else 'medium'
+
+        return {
+            'hours': round(hours, 2),
+            'minutes': round(hours * 60, 0),
+            'method': 'historical_measured',
+            'confidence': confidence,
+            'sample_count': power_stats[current_profile]['sample_count']
+        }
+
+    return None
+
+
+def format_time(hours):
+    """Format hours as HH:MM"""
+    h = int(hours)
+    m = int((hours - h) * 60)
+    return f"{h:02d}:{m:02d}"
+
+
+def print_simple(current_info, power_stats, current_profile):
+    """Simple output: just estimated time remaining"""
+    if current_info['status'] != 'Discharging':
+        print(f"Battery: {current_info['battery_percent']}% ({current_info['status']})")
+        return
+
+    estimate = estimate_battery_life(current_info, power_stats, current_profile)
+
+    if estimate:
+        print(f"{format_time(estimate['hours'])} remaining ({current_info['battery_percent']}%)")
+    else:
+        print(f"Unable to estimate (insufficient data)")
+
+
+def print_verbose(current_info, power_stats, current_profile, data):
+    """Verbose output: detailed statistics"""
+    print("=" * 70)
+    print("BATTERY TIME - Detailed Statistics")
+    print("=" * 70)
+    print()
+
+    # Current status
+    print("Current Status:")
+    print(f"  Battery Level:     {current_info['battery_percent']}%")
+    print(f"  Status:            {current_info['status']}")
+    print(f"  Energy Remaining:  {current_info['energy_now_mah']:.0f} mAh ({current_info['energy_now_wh']:.2f} Wh)")
+    print(f"  Current Draw:      {current_info['power_draw_watts']:.2f} W")
+    print(f"  Power Profile:     {current_profile}")
+    print()
+
+    # Time estimate
+    estimate = estimate_battery_life(current_info, power_stats, current_profile)
+    if estimate:
+        print("Estimated Time Remaining:")
+        print(f"  Time:              {format_time(estimate['hours'])} ({estimate['hours']:.2f} hours)")
+        print(f"  Method:            {estimate['method']}")
+        print(f"  Confidence:        {estimate['confidence']}")
+        if 'sample_count' in estimate:
+            print(f"  Based on:          {estimate['sample_count']} measurements")
+    else:
+        print("Estimated Time Remaining: Unable to estimate (insufficient data)")
+    print()
+
+    # Power profile statistics
+    print("Power Profile Statistics (from historical measurements):")
+    print()
+
+    if power_stats:
+        print(f"{'Profile':<15} {'Reported':>10} {'Measured':>10} {'Accuracy':>10} {'Samples':>8} {'Hours':>8}")
+        print("-" * 70)
+        for profile in sorted(power_stats.keys()):
+            stats = power_stats[profile]
+            marker = " *" if profile == current_profile else ""
+            print(f"{profile:<15}{marker:>2} "
+                  f"{stats['avg_reported_watts']:>8.2f} W "
+                  f"{stats['avg_measured_watts']:>8.2f} W "
+                  f"{stats['accuracy_percent']:>8.1f}% "
+                  f"{stats['sample_count']:>8} "
+                  f"{stats['total_hours']:>8.1f}")
+        print()
+        print("* = current profile")
+        print()
+
+        # Battery life estimates for each profile
+        print("Estimated Battery Life by Power Profile:")
+        print(f"{'Profile':<15} {'Full Battery':>15} {'Current Level':>15}")
+        print("-" * 50)
+
+        # Estimate full battery capacity (approximate from current data)
+        full_battery_wh = current_info['energy_now_wh'] / (current_info['battery_percent'] / 100) if current_info['battery_percent'] > 0 else 50
+
+        for profile in sorted(power_stats.keys()):
+            avg_power = power_stats[profile]['avg_measured_watts']
+            if avg_power > 0:
+                full_hours = full_battery_wh / avg_power
+                current_hours = current_info['energy_now_wh'] / avg_power
+                marker = " *" if profile == current_profile else ""
+                print(f"{profile:<15}{marker:>2} {format_time(full_hours):>15} {format_time(current_hours):>15}")
+        print()
+        if current_profile in power_stats:
+            print("* = current profile")
+    else:
+        print("  No data available yet. Run the battery monitor for a while to collect data.")
+
+    print()
+
+    # Power draw distribution
+    power_distributions = calculate_power_draw_distribution(data)
+    if power_distributions:
+        print("Power Draw Distribution by Profile:")
+        print()
+
+        for profile in sorted(power_distributions.keys()):
+            dist = power_distributions[profile]
+            marker = " *" if profile == current_profile else ""
+            print(f"{profile}{marker} (Total: {dist['total_hours']:.1f} hours):")
+            print()
+
+            # Display as a table
+            print(f"  {'Power Range':<12} {'Percentage':>12} {'Hours':>10} {'Graph'}")
+            print(f"  {'-' * 12} {'-' * 12} {'-' * 10} {'-' * 30}")
+
+            for bucket in dist['bucket_order']:
+                if bucket in dist['percentages']:
+                    pct = dist['percentages'][bucket]
+                    hrs = dist['hours'][bucket]
+                    bar_length = int(pct / 2)  # Scale to 50 chars max
+                    bar = "█" * bar_length
+                    print(f"  {bucket:<12} {pct:>11.1f}% {hrs:>10.2f}  {bar}")
+            print()
+
+        if current_profile in power_distributions:
+            print("* = current profile")
+        print()
+
+    # Data summary
+    print("Data Summary:")
+    print(f"  Total Measurements: {len(data)}")
+    if data:
+        earliest = min(d['timestamp_dt'] for d in data)
+        latest = max(d['timestamp_dt'] for d in data)
+        print(f"  Date Range:         {earliest.strftime('%Y-%m-%d')} to {latest.strftime('%Y-%m-%d')}")
+        print(f"  Monitoring Period:  {(latest - earliest).days} days")
+    print(f"  Log File:           {LOG_DIR / LOG_FILE}")
+    print()
+
+
+def print_graph(data, current_info, current_profile):
+    """Graph mode: ASCII graphs of battery data"""
+    if not data:
+        print("No data available for graphing. Run the battery monitor for a while to collect data.")
+        return
+
+    print("=" * 70)
+    print("BATTERY TIME - Graphs")
+    print("=" * 70)
+    print()
+
+    # Get recent data (last 24 hours)
+    now = datetime.now()
+    cutoff = now - timedelta(hours=24)
+    recent_data = [d for d in data if d['timestamp_dt'] >= cutoff]
+
+    if not recent_data:
+        print("No data from the last 24 hours.")
+        return
+
+    # Battery percentage over time
+    print("Battery Percentage (Last 24 Hours):")
+    print()
+
+    # Group by hour
+    hourly_data = defaultdict(list)
+    for d in recent_data:
+        hour = d['timestamp_dt'].replace(minute=0, second=0, microsecond=0)
+        hourly_data[hour].append(d['battery_percent'])
+
+    # Calculate averages
+    hours = sorted(hourly_data.keys())
+    if hours:
+        print("Time           Battery%  " + " " * 5 + "Graph")
+        print("-" * 70)
+
+        for hour in hours:
+            avg_percent = sum(hourly_data[hour]) / len(hourly_data[hour])
+            bar_length = int(avg_percent / 2)  # Scale to 50 chars max
+            bar = "█" * bar_length
+            time_str = hour.strftime("%m-%d %H:%M")
+            print(f"{time_str}      {avg_percent:5.1f}%  {bar}")
+
+    print()
+
+    # Power draw by profile
+    print("Average Power Draw by Profile:")
+    print()
+
+    profile_data = defaultdict(list)
+    for d in recent_data:
+        profile_data[d['power_profile']].append(d['power_draw_watts'])
+
+    if profile_data:
+        max_power = max(sum(draws) / len(draws) for draws in profile_data.values()) if profile_data else 1
+
+        print("Profile         Avg Power  " + " " * 5 + "Graph")
+        print("-" * 70)
+
+        for profile in sorted(profile_data.keys()):
+            avg_power = sum(profile_data[profile]) / len(profile_data[profile])
+            bar_length = int((avg_power / max_power) * 40)  # Scale to 40 chars max
+            bar = "█" * bar_length
+            marker = " *" if profile == current_profile else ""
+            print(f"{profile:<15}{marker:>2}  {avg_power:5.2f} W  {bar}")
+
+        print()
+        if current_profile in profile_data:
+            print("* = current profile")
+
+    print()
+
+    # Power draw distribution by profile
+    power_distributions = calculate_power_draw_distribution(data)
+    if power_distributions:
+        print("Power Draw Level Distribution by Profile (All Time):")
+        print()
+
+        for profile in sorted(power_distributions.keys()):
+            dist = power_distributions[profile]
+            marker = " *" if profile == current_profile else ""
+            print(f"{profile}{marker}:")
+            print()
+
+            for bucket in dist['bucket_order']:
+                if bucket in dist['percentages']:
+                    pct = dist['percentages'][bucket]
+                    hrs = dist['hours'][bucket]
+                    bar_length = int(pct / 2)  # Scale to 50 chars max
+                    bar = "█" * bar_length
+                    print(f"  {bucket:<10} {pct:>5.1f}% ({hrs:>6.1f}h)  {bar}")
+            print()
+
+        if current_profile in power_distributions:
+            print("* = current profile")
+        print()
+
+    print(f"Current Status: {current_info['battery_percent']}% | {current_info['status']} | {current_profile}")
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Analyze battery statistics and predict remaining time',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Show detailed statistics')
+    parser.add_argument('-g', '--graph', action='store_true',
+                        help='Show graphs of battery data')
+
+    args = parser.parse_args()
+
+    # Get current battery info
+    current_info = get_current_battery_info()
+    if not current_info:
+        print("Error: Unable to read battery information", file=sys.stderr)
+        sys.exit(1)
+
+    current_profile = get_power_profile()
+
+    # Load and analyze historical data
+    data = load_battery_data()
+    power_stats = calculate_real_power_draw(data)
+
+    # Display based on mode
+    if args.graph:
+        print_graph(data, current_info, current_profile)
+    elif args.verbose:
+        print_verbose(current_info, power_stats, current_profile, data)
+    else:
+        print_simple(current_info, power_stats, current_profile)
+
+
+if __name__ == "__main__":
+    main()
