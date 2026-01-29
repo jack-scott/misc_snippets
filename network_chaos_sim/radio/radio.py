@@ -64,6 +64,7 @@ class State:
     environment = "clear"
     topology = "mesh"
     link_quality = {}  # drone_id -> {latency_ms, loss_percent, bandwidth_kbps}
+    link_overrides = {}  # drone_id -> {extra_latency_ms, extra_loss_percent, partition}
     # Traffic stats
     prev_traffic = {}  # For rate calculation
     prev_time = 0
@@ -74,7 +75,8 @@ class State:
         "tx_packets_sec": 0, "rx_packets_sec": 0,
         "load_percent": 0.0,
     }
-    link_traffic = {}  # drone_id -> {tx_bytes, tx_packets, tx_bytes_sec, tx_packets_sec}
+    link_traffic = {}  # drone_id -> {tx_bytes, tx_packets, tx_bytes_sec, tx_packets_sec, dropped}
+    tc_class_map = {}  # class_id -> target_id (set during apply_link_rules)
 
 state = State()
 
@@ -119,10 +121,11 @@ def setup_iptables_accounting():
 
 def read_interface_stats():
     """Read total interface traffic from /proc/net/dev."""
+    iface = MANET_INTERFACE or "eth0"
     try:
         with open("/proc/net/dev") as f:
             for line in f:
-                if "eth0:" in line:
+                if f"{iface}:" in line:
                     parts = line.split()
                     # Format: iface rx_bytes rx_packets ... tx_bytes tx_packets ...
                     return {
@@ -135,41 +138,57 @@ def read_interface_stats():
         pass
     return {"rx_bytes": 0, "rx_packets": 0, "tx_bytes": 0, "tx_packets": 0}
 
-def read_iptables_counters():
-    """Read per-destination traffic counters from iptables."""
+def read_tc_class_stats():
+    """Read per-class traffic stats from tc (shows actual delivered traffic after netem)."""
     counters = {}
+
     try:
-        # Get OUTPUT chain stats (traffic TO other drones)
-        ok, output = run_cmd("iptables -L OUTPUT -n -v -x")
+        # Read qdisc stats - netem qdiscs are children of HTB classes
+        # The netem handle matches the class ID it's attached to
+        ok, qdisc_output = run_cmd(f"tc -s qdisc show dev {MANET_INTERFACE}")
         if ok:
-            for line in output.split("\n"):
-                parts = line.split()
-                if len(parts) >= 9 and parts[2] == "ACCEPT":
-                    # Look for destination IP
-                    dst = parts[8] if len(parts) > 8 else None
-                    if dst and dst.startswith("172.31.0."):
-                        # Extract drone ID from IP
-                        try:
-                            if dst == "172.31.0.10":
-                                target_id = 0
-                            else:
-                                target_id = int(dst.split(".")[-1]) - 10
-                            if 0 <= target_id <= DRONE_COUNT and target_id != DRONE_ID:
-                                counters[target_id] = {
-                                    "tx_packets": int(parts[0]),
-                                    "tx_bytes": int(parts[1]),
-                                }
-                        except (ValueError, IndexError):
-                            pass
-    except Exception:
-        pass
+            current_class_id = None
+            for line in qdisc_output.split("\n"):
+                if line.startswith("qdisc netem"):
+                    # Extract parent class: "qdisc netem 11: parent 1:11 ..."
+                    try:
+                        parts = line.split()
+                        # parent is like "1:11" - extract the class ID
+                        parent = parts[4]  # "1:11"
+                        current_class_id = int(parent.split(":")[1])
+                    except (ValueError, IndexError):
+                        current_class_id = None
+                elif current_class_id and "Sent" in line:
+                    # Parse: " Sent 169486 bytes 2422 pkt (dropped 22, overlimits 0 requeues 0)"
+                    try:
+                        parts = line.split()
+                        bytes_sent = int(parts[1])
+                        pkts_sent = int(parts[3])
+                        dropped = 0
+                        if "dropped" in line:
+                            dropped = int(line.split("dropped")[1].split(",")[0].strip())
+
+                        # Map class ID to target drone ID
+                        if current_class_id in state.tc_class_map:
+                            target_id = state.tc_class_map[current_class_id]
+                            counters[target_id] = {
+                                "tx_bytes": bytes_sent,
+                                "tx_packets": pkts_sent,
+                                "dropped": dropped,
+                            }
+                    except (ValueError, IndexError):
+                        pass
+                    current_class_id = None
+    except Exception as e:
+        print(f"Error reading tc stats: {e}")
+
     return counters
 
 def update_traffic_stats():
     """Update traffic statistics with rate calculations."""
     now = time.time()
     current = read_interface_stats()
-    link_counters = read_iptables_counters()
+    link_counters = read_tc_class_stats()  # Use tc stats for accurate per-link traffic
 
     if state.prev_time > 0:
         elapsed = now - state.prev_time
@@ -191,17 +210,30 @@ def update_traffic_stats():
             total_bytes_sec = state.traffic_stats["tx_bytes_sec"] + state.traffic_stats["rx_bytes_sec"]
             state.traffic_stats["load_percent"] = min(100, round(100 * total_bytes_sec / bandwidth_bytes_sec, 1)) if bandwidth_bytes_sec > 0 else 0
 
-            # Calculate per-link rates
+            # Calculate per-link rates from tc stats (actual delivered traffic)
             for target_id, counters in link_counters.items():
                 prev_link = state.link_traffic.get(target_id, {})
-                tx_bytes_sec = int((counters["tx_bytes"] - prev_link.get("tx_bytes", 0)) / elapsed)
-                tx_packets_sec = int((counters["tx_packets"] - prev_link.get("tx_packets", 0)) / elapsed)
+                prev_bytes = prev_link.get("tx_bytes", 0)
+                prev_packets = prev_link.get("tx_packets", 0)
+                prev_dropped = prev_link.get("dropped", 0)
+
+                # Handle counter reset (when rules are reapplied)
+                if counters["tx_bytes"] < prev_bytes:
+                    prev_bytes = 0
+                    prev_packets = 0
+                    prev_dropped = 0
+
+                tx_bytes_sec = int((counters["tx_bytes"] - prev_bytes) / elapsed)
+                tx_packets_sec = int((counters["tx_packets"] - prev_packets) / elapsed)
+                dropped_sec = int((counters["dropped"] - prev_dropped) / elapsed)
 
                 state.link_traffic[target_id] = {
                     "tx_bytes": counters["tx_bytes"],
                     "tx_packets": counters["tx_packets"],
-                    "tx_bytes_sec": max(0, tx_bytes_sec),  # Avoid negative on counter reset
+                    "dropped": counters["dropped"],
+                    "tx_bytes_sec": max(0, tx_bytes_sec),
                     "tx_packets_sec": max(0, tx_packets_sec),
+                    "dropped_sec": max(0, dropped_sec),
                 }
 
     state.prev_traffic = current
@@ -314,9 +346,26 @@ def run_cmd(cmd, check=False):
     except subprocess.TimeoutExpired:
         return False, "timeout"
 
+def get_manet_interface():
+    """Find the network interface connected to the MANET mesh (172.31.0.x)."""
+    try:
+        ok, output = run_cmd("ip -o addr show")
+        if ok:
+            for line in output.split("\n"):
+                if "172.31.0." in line:
+                    # Format: "3: eth1    inet 172.31.0.11/24 ..."
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return parts[1].rstrip(":")
+    except Exception:
+        pass
+    return "eth0"  # Fallback
+
+MANET_INTERFACE = None  # Will be set at startup
+
 def setup_htb_root():
     """Set up HTB qdisc for shared bandwidth control."""
-    interface = "eth0"
+    interface = MANET_INTERFACE
     bandwidth = get_radio_bandwidth()
 
     # Clear existing rules
@@ -333,7 +382,7 @@ def setup_htb_root():
 
 def apply_link_rules():
     """Apply tc rules for each link based on calculated quality."""
-    interface = "eth0"
+    interface = MANET_INTERFACE
     bandwidth = get_radio_bandwidth()
     targets = get_other_drones()
 
@@ -343,27 +392,36 @@ def apply_link_rules():
             continue
         state.link_quality[target_id] = calculate_link_quality(target_id)
 
-    # Clear existing classes (except root and default)
+    # Clear existing netem qdiscs, classes, and filters
     for i in range(1, 20):
+        # Delete netem qdisc by parent (more reliable than by handle)
+        run_cmd(f"tc qdisc del dev {interface} parent 1:{10+i} 2>/dev/null")
         run_cmd(f"tc class del dev {interface} classid 1:{10+i} 2>/dev/null")
-        run_cmd(f"tc qdisc del dev {interface} handle {10+i}: 2>/dev/null")
         run_cmd(f"tc filter del dev {interface} prio {i} 2>/dev/null")
+
+    # Clear the class mapping
+    state.tc_class_map = {}
 
     # Create class and netem qdisc for each reachable target
     class_id = 10
     for target_id in targets:
         quality = state.link_quality.get(target_id, {})
+        override = state.link_overrides.get(target_id, {})
         target_ip = get_drone_ip(target_id)
 
-        if not quality.get("reachable", True):
-            # Unreachable: use netem with 100% loss
+        if not quality.get("reachable", True) or override.get("partition", False):
+            # Unreachable or partitioned: use netem with 100% loss
             latency = 0
             loss = 100
         else:
-            latency = int(quality.get("latency_ms", 10))
-            loss = int(quality.get("loss_percent", 0))
+            # Base quality + any overrides
+            latency = int(quality.get("latency_ms", 10)) + int(override.get("extra_latency_ms", 0))
+            loss = min(100, int(quality.get("loss_percent", 0)) + int(override.get("extra_loss_percent", 0)))
 
         class_id += 1
+
+        # Store mapping for traffic stats
+        state.tc_class_map[class_id] = target_id
 
         # Create HTB class (shares parent bandwidth)
         run_cmd(f"tc class add dev {interface} parent 1:1 classid 1:{class_id} htb rate 10kbit ceil {bandwidth}kbit")
@@ -450,9 +508,10 @@ def probe_loop():
                 "expected_loss_percent": quality.get("loss_percent", 0),
                 "reachable": quality.get("reachable", True),
                 "timestamp": time.time(),
-                # Link traffic stats
+                # Link traffic stats (from tc - actual delivered traffic)
                 "tx_bytes_sec": link_traffic.get("tx_bytes_sec", 0),
                 "tx_packets_sec": link_traffic.get("tx_packets_sec", 0),
+                "dropped_sec": link_traffic.get("dropped_sec", 0),
             }
 
         write_metrics()
@@ -472,6 +531,7 @@ def write_metrics():
         "bandwidth_kbps": get_radio_bandwidth(),
         "probes": probe_results,
         "link_quality": {str(k): v for k, v in state.link_quality.items()},
+        "link_overrides": {str(k): v for k, v in state.link_overrides.items()},
         "traffic": state.traffic_stats,
     }
 
@@ -540,6 +600,7 @@ class RadioHandler(BaseHTTPRequestHandler):
                 "bandwidth_kbps": get_radio_bandwidth(),
                 "probes": probe_results,
                 "link_quality": state.link_quality,
+                "link_overrides": state.link_overrides,
             })
         elif self.path == "/config":
             self.send_json(CONFIG)
@@ -596,16 +657,52 @@ class RadioHandler(BaseHTTPRequestHandler):
             except (ValueError, IndexError):
                 self.send_json({"error": "invalid drone id"}, 400)
 
+        elif self.path == "/link_override":
+            # Set link quality override
+            data = self.read_json()
+            target_id = data.get("target")
+            if target_id is None:
+                self.send_json({"error": "target required"}, 400)
+                return
+
+            state.link_overrides[target_id] = {
+                "extra_latency_ms": data.get("extra_latency_ms", 0),
+                "extra_loss_percent": data.get("extra_loss_percent", 0),
+                "partition": data.get("partition", False),
+            }
+            apply_link_rules()
+            print(f"Link override set for target {target_id}: {state.link_overrides[target_id]}")
+            self.send_json({"ok": True, "override": state.link_overrides[target_id]})
+
+        else:
+            self.send_json({"error": "not found"}, 404)
+
+    def do_DELETE(self):
+        if self.path.startswith("/link_override/"):
+            # Clear link quality override
+            try:
+                target_id = int(self.path.split("/")[2])
+                if target_id in state.link_overrides:
+                    del state.link_overrides[target_id]
+                    apply_link_rules()
+                    print(f"Link override cleared for target {target_id}")
+                self.send_json({"ok": True})
+            except (ValueError, IndexError):
+                self.send_json({"error": "invalid target id"}, 400)
         else:
             self.send_json({"error": "not found"}, 404)
 
 def main():
+    global MANET_INTERFACE
+    MANET_INTERFACE = get_manet_interface()
+
     print(f"Enhanced Radio starting for drone {DRONE_ID}")
+    print(f"MANET interface: {MANET_INTERFACE}")
     print(f"Topology: {state.topology}")
     print(f"Environment: {state.environment}")
     print(f"Bandwidth: {get_radio_bandwidth()} kbit/s")
 
-    # Set up traffic control
+    # Set up traffic control on the MANET interface
     setup_htb_root()
     apply_link_rules()
 

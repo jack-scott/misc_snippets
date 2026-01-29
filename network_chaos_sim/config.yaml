@@ -114,4 +114,4 @@ defaults:
   positions:
     1: { x: 0, y: 0, z: 50 }
     2: { x: 100, y: 0, z: 50 }
-    3: { x: 50, y: 86, z: 50 }  # Triangle formation
+    3: { x: 0, y: 100, z: 50 }  # Triangle formation

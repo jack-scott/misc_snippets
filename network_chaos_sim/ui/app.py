@@ -104,6 +104,8 @@ HTML_TEMPLATE = """
         .link.degraded { stroke: #ffaa00; }
         .link.bad { stroke: #ff4444; }
         .link.down { stroke: #333; stroke-dasharray: 5,5; }
+        .link.override { stroke-dasharray: 8,4; }
+        .link.partition { stroke: #ff00ff; stroke-dasharray: 3,6; }
 
         .link-label { font-size: 9px; fill: #888; pointer-events: none; }
         .link-traffic { font-size: 8px; fill: #666; pointer-events: none; }
@@ -252,9 +254,11 @@ HTML_TEMPLATE = """
                         <div class="zoom-level" id="zoom-level">100%</div>
                     </div>
                     <div class="legend">
-                        <div class="legend-item"><div class="legend-line good"></div> Good (&lt;50ms)</div>
+                        <div class="legend-item"><div class="legend-line good"></div> Good</div>
                         <div class="legend-item"><div class="legend-line degraded"></div> Degraded</div>
-                        <div class="legend-item"><div class="legend-line bad"></div> Bad/Unreachable</div>
+                        <div class="legend-item"><div class="legend-line bad"></div> Bad</div>
+                        <div class="legend-item"><div class="legend-line" style="background:#ff00ff"></div> Partitioned</div>
+                        <div class="legend-item"><div class="legend-line good" style="background:repeating-linear-gradient(90deg,#00ff88 0,#00ff88 8px,transparent 8px,transparent 12px)"></div> Override</div>
                     </div>
                 </div>
             </div>
@@ -338,6 +342,45 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    <!-- Link Editor Modal -->
+    <div class="modal" id="link-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="link-modal-title">Edit Link</h2>
+                <button class="modal-close" onclick="closeLinkModal()">&times;</button>
+            </div>
+            <div class="status-row" style="margin-bottom: 15px;">
+                <div class="status-item">
+                    <span>Base latency: <strong id="link-base-latency">-</strong></span>
+                </div>
+                <div class="status-item">
+                    <span>Base loss: <strong id="link-base-loss">-</strong></span>
+                </div>
+            </div>
+            <div class="control-row">
+                <div class="control-group">
+                    <label>Extra Latency (ms)</label>
+                    <input type="number" id="link-latency" value="0" min="0" max="5000">
+                </div>
+                <div class="control-group">
+                    <label>Extra Loss (%)</label>
+                    <input type="number" id="link-loss" value="0" min="0" max="100">
+                </div>
+            </div>
+            <div class="control-row">
+                <div class="control-group">
+                    <label>
+                        <input type="checkbox" id="link-partition"> Partition (100% loss)
+                    </label>
+                </div>
+            </div>
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button class="btn btn-primary" onclick="saveLinkOverride()">Apply</button>
+                <button class="btn" style="background:#444;" onclick="clearLinkOverride()">Clear Override</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const DRONE_COUNT = {{ drone_count }};
         const CONFIG = {{ config | tojson }};
@@ -345,6 +388,7 @@ HTML_TEMPLATE = """
         let metrics = {};
         let links = [];
         let selectedDrone = null;
+        let selectedLink = null;  // {source, target}
         let currentTopology = 'mesh';
         let currentEnvironment = 'clear';
 
@@ -429,7 +473,9 @@ HTML_TEMPLATE = """
             links = [];
             for (const [droneId, data] of Object.entries(metrics)) {
                 const probes = data.probes || {};
+                const overrides = data.link_overrides || {};
                 for (const [targetId, probe] of Object.entries(probes)) {
+                    const override = overrides[targetId] || {};
                     links.push({
                         source: parseInt(droneId),
                         target: parseInt(targetId),
@@ -441,6 +487,11 @@ HTML_TEMPLATE = """
                         position: data.position || {},
                         tx_bytes_sec: probe.tx_bytes_sec || 0,
                         tx_packets_sec: probe.tx_packets_sec || 0,
+                        dropped_sec: probe.dropped_sec || 0,
+                        expected_latency_ms: probe.expected_latency_ms || 0,
+                        expected_loss_percent: probe.expected_loss_percent || 0,
+                        has_override: !!(override.extra_latency_ms || override.extra_loss_percent || override.partition),
+                        partition: override.partition || false,
                     });
                 }
             }
@@ -490,6 +541,7 @@ HTML_TEMPLATE = """
                 if (!from || !to) continue;
 
                 const status = getLinkStatus(link);
+                const overrideClass = link.partition ? 'partition' : (link.has_override ? 'override' : '');
 
                 // Offset for bidirectional (constant offset regardless of zoom)
                 const dx = to.x - from.x;
@@ -498,10 +550,11 @@ HTML_TEMPLATE = """
                 const ox = -dy/len * 6;
                 const oy = dx/len * 6;
 
-                content += `<line class="link ${status}"
+                content += `<line class="link ${status} ${overrideClass}"
                     x1="${from.x + ox}" y1="${from.y + oy}"
                     x2="${to.x + ox}" y2="${to.y + oy}"
-                    stroke-width="3"/>`;
+                    stroke-width="3"
+                    onclick="editLink(${link.source}, ${link.target})"/>`;
 
                 // Distance and traffic label
                 const midX = (from.x + to.x) / 2 + ox;
@@ -639,6 +692,7 @@ HTML_TEMPLATE = """
                 const distStr = link.distance_m > 0 ? Math.round(link.distance_m) + 'm' : '-';
                 const trafficStr = link.tx_bytes_sec > 0 ? formatBytes(link.tx_bytes_sec) : '-';
                 const pktStr = link.tx_packets_sec > 0 ? link.tx_packets_sec + ' pkt/s' : '-';
+                const droppedStr = link.dropped_sec > 0 ? `<span style="color:#ff4444">${link.dropped_sec} drop/s</span>` : '';
 
                 html += `<div class="link-item">
                     <div class="link-header">
@@ -651,6 +705,7 @@ HTML_TEMPLATE = """
                         <span>UDP: ${link.udp_ok ? '✓' : '✗'}</span>
                         <span>${distStr}</span>
                         <span>${pktStr}</span>
+                        ${droppedStr}
                     </div>
                 </div>`;
             }
@@ -707,6 +762,72 @@ HTML_TEMPLATE = """
         function closeModal() {
             document.getElementById('position-modal').classList.remove('active');
             selectedDrone = null;
+        }
+
+        function editLink(source, target) {
+            selectedLink = { source, target };
+
+            // Find link data
+            const link = links.find(l => l.source === source && l.target === target);
+            const baseLatency = link?.expected_latency_ms || 0;
+            const baseLoss = link?.expected_loss_percent || 0;
+
+            document.getElementById('link-modal-title').textContent =
+                `Link: D${source} → ${target === 0 ? 'BS' : 'D' + target}`;
+            document.getElementById('link-base-latency').textContent = baseLatency.toFixed(1) + 'ms';
+            document.getElementById('link-base-loss').textContent = baseLoss.toFixed(1) + '%';
+
+            // Check for existing override
+            const droneData = metrics[source] || {};
+            const override = droneData.link_overrides?.[target] || {};
+
+            document.getElementById('link-latency').value = override.extra_latency_ms || 0;
+            document.getElementById('link-loss').value = override.extra_loss_percent || 0;
+            document.getElementById('link-partition').checked = override.partition || false;
+
+            document.getElementById('link-modal').classList.add('active');
+        }
+
+        function closeLinkModal() {
+            document.getElementById('link-modal').classList.remove('active');
+            selectedLink = null;
+        }
+
+        async function saveLinkOverride() {
+            if (!selectedLink) return;
+
+            const partition = document.getElementById('link-partition').checked;
+            const override = {
+                extra_latency_ms: partition ? 0 : parseInt(document.getElementById('link-latency').value) || 0,
+                extra_loss_percent: partition ? 100 : parseInt(document.getElementById('link-loss').value) || 0,
+                partition: partition,
+            };
+
+            try {
+                await fetch(`/api/link/${selectedLink.source}/${selectedLink.target}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(override)
+                });
+                closeLinkModal();
+                setTimeout(fetchMetrics, 500);
+            } catch (e) {
+                console.error('Failed to set link override:', e);
+            }
+        }
+
+        async function clearLinkOverride() {
+            if (!selectedLink) return;
+
+            try {
+                await fetch(`/api/link/${selectedLink.source}/${selectedLink.target}`, {
+                    method: 'DELETE',
+                });
+                closeLinkModal();
+                setTimeout(fetchMetrics, 500);
+            } catch (e) {
+                console.error('Failed to clear link override:', e);
+            }
         }
 
         async function savePosition() {
@@ -868,6 +989,46 @@ def api_set_environment():
             results.append({"drone": i, "error": str(e)})
 
     return jsonify({"results": results})
+
+
+@app.route("/api/link/<int:source>/<int:target>", methods=["POST"])
+def api_set_link_override(source, target):
+    """Set link quality override (extra latency/loss or partition)."""
+    data = request.json
+
+    # Send to the source drone
+    if source == 0:
+        url = "http://base_station_radio:8080/link_override"
+    else:
+        url = f"http://drone{source}_radio:8080/link_override"
+
+    try:
+        resp = requests.post(
+            url,
+            json={"target": target, **data},
+            timeout=5
+        )
+        return jsonify({"ok": resp.ok})
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/link/<int:source>/<int:target>", methods=["DELETE"])
+def api_clear_link_override(source, target):
+    """Clear link quality override."""
+    if source == 0:
+        url = "http://base_station_radio:8080/link_override"
+    else:
+        url = f"http://drone{source}_radio:8080/link_override"
+
+    try:
+        resp = requests.delete(
+            f"{url}/{target}",
+            timeout=5
+        )
+        return jsonify({"ok": resp.ok})
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
