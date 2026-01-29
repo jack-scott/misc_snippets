@@ -1,0 +1,36 @@
+[workspace]
+channels = [
+    "https://repo.prefix.dev/jacks-channel",  # ← YOUR CHANNEL FIRST
+    "https://prefix.dev/robostack-humble",
+    "https://prefix.dev/conda-forge",
+]
+platforms = ["linux-64"]
+preview = ["pixi-build"]
+
+[dependencies]
+python = ">=3.10"
+ros-humble-ros2run = "*"
+ros-humble-ros2topic = "*"
+# ---- Comment out either the local or remote to switch between trying the different sources ----
+# DEVELOPMENT: Use local source for active changes
+ros-humble-cadvisor-monitor = { path = "src/cadvisor_monitor" }
+# DEPLOYEMENT: Use this upstream version after you have published the package (refer to README)
+# ros-humble-cadvisor-monitor = "0.1.*"
+
+[tasks]
+# Standalone CLI tool (no ROS needed for display)
+monitor = "python scripts/top_cpu_usage.py"
+monitor-all = "python scripts/top_cpu_usage.py -a"
+
+# ROS 2 node
+ros-run = { cmd = "ros2 run cadvisor_monitor container_stats_publisher --ros-args -p cadvisor_url:=http://$CADVISOR_HOST:$CADVISOR_PORT"}
+ros-topics = "ros2 topic list"
+ros-echo-cpu = "ros2 topic echo /container_stats/cpu"
+ros-echo-mem = "ros2 topic echo /container_stats/memory"
+
+# PUBLISH WORKFLOW
+publish = """
+    cd src/cadvisor_monitor && \
+    pixi build && \
+    pixi upload prefix --channel jacks-channel --api-key $PREFIX_AUTH *.conda
+"""

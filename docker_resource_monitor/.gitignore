@@ -1,0 +1,29 @@
+# Pixi
+.pixi/
+*.conda
+
+# Python
+__pycache__/
+files.txt
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+.env
+!.env.template
+
+# ROS 2 / Colcon
+install/
+log/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
