@@ -1,0 +1,117 @@
+# MANET Chaos Simulator Configuration
+# =====================================
+# Adjust these values to model different radio/environment characteristics
+
+# Radio hardware characteristics
+radio:
+  # Total bandwidth per radio (shared across all links)
+  bandwidth_kbps: 1000
+
+  # Base station (only used in star topology)
+  base_station:
+    bandwidth_kbps: 2000  # Base station often has better hardware
+    position:
+      x: 0
+      y: 0
+      z: 0
+
+# Distance-based signal degradation model
+# Interpolates between these points based on actual distance
+distance:
+  max_range_m: 1000  # Beyond this = no connection
+
+  # Define degradation at various distances
+  # Values between points are linearly interpolated
+  thresholds:
+    - range_m: 0
+      latency_ms: 2
+      loss_percent: 0
+
+    - range_m: 100
+      latency_ms: 5
+      loss_percent: 1
+
+    - range_m: 300
+      latency_ms: 15
+      loss_percent: 5
+
+    - range_m: 500
+      latency_ms: 30
+      loss_percent: 10
+
+    - range_m: 800
+      latency_ms: 60
+      loss_percent: 20
+
+    - range_m: 1000
+      latency_ms: 100
+      loss_percent: 40
+
+# Environment/weather profiles
+# These multiply the base distance-derived values
+environment:
+  profiles:
+    clear:
+      description: "Clear conditions, minimal interference"
+      latency_multiplier: 1.0
+      loss_multiplier: 1.0
+      bandwidth_multiplier: 1.0
+
+    humid:
+      description: "High humidity, slight signal absorption"
+      latency_multiplier: 1.2
+      loss_multiplier: 1.5
+      bandwidth_multiplier: 0.95
+
+    light_rain:
+      description: "Light rain, moderate signal degradation"
+      latency_multiplier: 1.4
+      loss_multiplier: 2.0
+      bandwidth_multiplier: 0.85
+
+    heavy_rain:
+      description: "Heavy rain, significant signal degradation"
+      latency_multiplier: 1.8
+      loss_multiplier: 3.0
+      bandwidth_multiplier: 0.7
+
+    storm:
+      description: "Storm conditions, severe degradation"
+      latency_multiplier: 2.5
+      loss_multiplier: 5.0
+      bandwidth_multiplier: 0.5
+
+    fog:
+      description: "Dense fog, moderate absorption"
+      latency_multiplier: 1.3
+      loss_multiplier: 1.8
+      bandwidth_multiplier: 0.9
+
+    urban:
+      description: "Urban environment, multipath/interference"
+      latency_multiplier: 1.5
+      loss_multiplier: 2.5
+      bandwidth_multiplier: 0.8
+
+# Network topology configuration
+topology:
+  # Default mode: "mesh" or "star"
+  default: mesh
+
+  # Star topology settings
+  star:
+    # In star mode, all traffic routes through base station
+    # Drones cannot communicate directly with each other
+    # Base station ID is 0
+    hub_id: 0
+
+# Defaults applied at startup
+defaults:
+  environment: clear
+
+  # Initial drone positions (can be updated via API)
+  # If not specified, drones start at (0,0,0)
+  positions:
+    1: { x: 0, y: 0, z: 50 }
+    2: { x: 100, y: 0, z: 50 }
+    3: { x: 50, y: 86, z: 50 }  # Triangle formation

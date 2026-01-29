@@ -2,12 +2,12 @@
 """
 MANET Chaos Simulator Launcher
 
-Launches N drones from the template, creating the shared network and control plane.
+Launches N drones with configurable network chaos simulation.
 
 Usage:
-    ./launch.py 3        # Launch 3 drones
-    ./launch.py 5        # Launch 5 drones
-    ./launch.py down     # Stop everything
+    ./launch.py 3           # Launch 3 drones
+    ./launch.py 5 --star    # Launch 5 drones + base station (star topology)
+    ./launch.py down        # Stop everything
 """
 
 import subprocess
@@ -27,23 +27,31 @@ def run(cmd, check=True):
     return result.returncode == 0
 
 
-def launch(drone_count):
+def launch(drone_count, with_base_station=False):
     """Launch the MANET simulator with N drones."""
-    print(f"\n=== Launching MANET Chaos Simulator with {drone_count} drones ===\n")
+    print(f"\n=== Launching MANET Chaos Simulator ===")
+    print(f"    Drones: {drone_count}")
+    print(f"    Base Station: {'Yes' if with_base_station else 'No'}")
+    print()
 
-    # Create shared MANET mesh network with subnet
-    print("Creating shared MANET mesh network...")
+    # Create shared MANET mesh network
+    print("Creating shared networks...")
     run("docker network create --subnet=172.31.0.0/24 manet_mesh 2>/dev/null || true", check=False)
 
     # Create shared metrics volume
-    print("Creating shared metrics volume...")
+    print("Creating shared volumes...")
     run("docker volume create manet_metrics 2>/dev/null || true", check=False)
 
     # Launch control plane (UI)
     print("\nStarting control plane...")
     run(f"DRONE_COUNT={drone_count} docker compose up -d --build")
 
-    # Launch each drone (radio + app)
+    # Launch base station if requested
+    if with_base_station:
+        print("\n--- Base Station ---")
+        run(f"DRONE_COUNT={drone_count} docker compose -f base_station/compose.yml -p base_station up -d --build")
+
+    # Launch each drone
     print(f"\nStarting {drone_count} drones...")
     for i in range(1, drone_count + 1):
         print(f"\n--- Drone {i} ---")
@@ -51,13 +59,19 @@ def launch(drone_count):
         compose_files = "-f drone/compose.radio.yml -f drone/compose.app.yml"
         run(f"{env} docker compose {compose_files} -p drone{i} up -d --build")
 
-    print(f"\n=== MANET Simulator Ready ===")
-    print(f"  UI:      http://localhost:8080")
-    print(f"  Drones:  {drone_count}")
-    print(f"\nView logs:")
-    print(f"  docker logs -f drone1_radio")
-    print(f"\nStop everything:")
-    print(f"  ./launch.py down")
+    print(f"\n{'='*50}")
+    print(f"  MANET Simulator Ready")
+    print(f"{'='*50}")
+    print(f"  UI:           http://localhost:8080")
+    print(f"  Drones:       {drone_count}")
+    if with_base_station:
+        print(f"  Base Station: Yes (172.31.0.10)")
+    print(f"  Config:       config.yaml")
+    print()
+    print("Commands:")
+    print("  docker logs -f drone1_radio   # View drone logs")
+    print("  ./launch.py down              # Stop everything")
+    print()
 
 
 def stop():
@@ -72,7 +86,7 @@ def stop():
     projects = result.stdout.strip().split("\n")
 
     for project in projects:
-        if project.startswith("drone"):
+        if project.startswith("drone") or project == "base_station":
             print(f"Stopping {project}...")
             run(f"docker compose -p {project} down", check=False)
 
@@ -80,7 +94,7 @@ def stop():
     print("Stopping control plane...")
     run("docker compose down", check=False)
 
-    # Optionally remove shared resources
+    # Remove shared resources
     print("Removing shared network...")
     run("docker network rm manet_mesh 2>/dev/null || true", check=False)
 
@@ -103,7 +117,9 @@ def main():
             sys.exit(1)
         if drone_count > 10:
             print("Warning: More than 10 drones may be slow")
-        launch(drone_count)
+
+        with_base_station = "--star" in sys.argv
+        launch(drone_count, with_base_station)
     else:
         print(f"Unknown argument: {arg}")
         print(__doc__)

@@ -1,4 +1,4 @@
-"""MANET Chaos Simulator UI - Network visualization and chaos control."""
+"""MANET Chaos Simulator UI - Enhanced with position, environment, and topology controls."""
 
 import json
 import os
@@ -6,11 +6,20 @@ import time
 from pathlib import Path
 
 import requests
+import yaml
 from flask import Flask, jsonify, request, render_template_string
 
 app = Flask(__name__)
 DRONE_COUNT = int(os.environ.get("DRONE_COUNT", 3))
 METRICS_DIR = Path("/metrics")
+CONFIG_DIR = Path("/config")
+
+def load_config():
+    config_file = CONFIG_DIR / "config.yaml"
+    if config_file.exists():
+        with open(config_file) as f:
+            return yaml.safe_load(f)
+    return {}
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -32,130 +41,161 @@ HTML_TEMPLATE = """
 
         .main-layout {
             display: grid;
-            grid-template-columns: 1fr 380px;
+            grid-template-columns: 1fr 320px;
             gap: 20px;
-        }
-
-        /* Topology panel */
-        .topology {
-            background: #16213e;
-            border-radius: 12px;
-            padding: 20px;
-            min-height: 500px;
-        }
-        .topology h2 { font-size: 13px; color: #666; margin-bottom: 15px; text-transform: uppercase; }
-        .topology svg { width: 100%; height: 450px; }
-
-        /* Drone nodes */
-        .drone circle {
-            fill: #0f3460;
-            stroke: #00d9ff;
-            stroke-width: 2;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .drone:hover circle { fill: #1a4a7a; stroke-width: 3; }
-        .drone text {
-            fill: #fff;
-            font-size: 16px;
-            font-weight: 600;
-            text-anchor: middle;
-            dominant-baseline: middle;
-            pointer-events: none;
-        }
-        .drone-label {
-            fill: #888;
-            font-size: 11px;
-            text-anchor: middle;
-        }
-
-        /* Link lines */
-        .link { cursor: pointer; transition: all 0.2s; }
-        .link:hover { stroke-width: 6 !important; }
-        .link.good { stroke: #00ff88; }
-        .link.degraded { stroke: #ffaa00; }
-        .link.bad { stroke: #ff4444; }
-        .link.down { stroke: #444; stroke-dasharray: 5,5; }
-
-        /* Link metrics labels */
-        .link-metrics {
-            font-size: 10px;
-            fill: #aaa;
-            pointer-events: none;
-        }
-        .link-metrics.bad { fill: #ff6666; }
-
-        /* Status indicators */
-        .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 5px;
-        }
-        .status-dot.good { background: #00ff88; }
-        .status-dot.bad { background: #ff4444; }
-
-        /* Side panel */
-        .side-panel {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
         }
 
         .panel {
             background: #16213e;
             border-radius: 12px;
             padding: 15px;
+            margin-bottom: 15px;
         }
         .panel h2 {
-            font-size: 13px;
+            font-size: 12px;
             color: #666;
             margin-bottom: 12px;
             text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
-        /* Link list */
-        .link-item {
+        /* Topology visualization */
+        .topology { min-height: 400px; position: relative; }
+        .topology svg { width: 100%; height: 380px; cursor: grab; }
+        .topology svg.dragging { cursor: grabbing; }
+        .zoom-controls {
+            position: absolute;
+            top: 35px;
+            right: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .zoom-btn {
+            width: 28px;
+            height: 28px;
+            background: #0f3460;
+            border: 1px solid #2a4a6a;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-btn:hover { background: #1a4a7a; border-color: #00d9ff; }
+        .zoom-level { font-size: 10px; color: #666; text-align: center; }
+
+        .drone circle {
+            fill: #0f3460;
+            stroke: #00d9ff;
+            stroke-width: 2;
+            cursor: pointer;
+        }
+        .drone:hover circle { fill: #1a4a7a; }
+        .drone.base circle { fill: #2d1b4e; stroke: #9b59b6; }
+        .drone text { fill: #fff; font-size: 12px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+        .drone .pos-label { fill: #666; font-size: 9px; font-weight: normal; }
+
+        .link { cursor: pointer; }
+        .link:hover { stroke-width: 5 !important; }
+        .link.good { stroke: #00ff88; }
+        .link.degraded { stroke: #ffaa00; }
+        .link.bad { stroke: #ff4444; }
+        .link.down { stroke: #333; stroke-dasharray: 5,5; }
+
+        .link-label { font-size: 9px; fill: #888; pointer-events: none; }
+        .link-traffic { font-size: 8px; fill: #666; pointer-events: none; }
+
+        /* Node stats panel */
+        .node-stats {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .node-stat-item {
             background: #0f3460;
             border-radius: 8px;
-            padding: 10px 12px;
+            padding: 10px;
             margin-bottom: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 13px;
+            font-size: 12px;
         }
-        .link-item:hover { background: #1a4a7a; }
-        .link-item.selected { border: 2px solid #00d9ff; }
-
-        .link-header {
+        .node-stat-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 6px;
         }
-        .link-name { font-weight: 600; }
-
-        .link-stats {
+        .node-stat-name { font-weight: 600; }
+        .node-stat-load {
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .node-stat-load.low { background: #00ff8833; color: #00ff88; }
+        .node-stat-load.medium { background: #ffaa0033; color: #ffaa00; }
+        .node-stat-load.high { background: #ff444433; color: #ff4444; }
+        .node-stat-details {
             display: flex;
             gap: 12px;
-            font-size: 11px;
+            font-size: 10px;
             color: #888;
         }
-        .link-stats .metric { display: flex; align-items: center; gap: 4px; }
-        .link-stats .value { color: #fff; }
-        .link-stats .value.bad { color: #ff6666; }
+        .node-stat-details span { display: flex; align-items: center; gap: 4px; }
 
-        /* Chaos badge */
-        .chaos-badge {
-            background: #ff444433;
-            color: #ff8888;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 10px;
+        /* Controls */
+        .control-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .control-group { flex: 1; }
+        .control-group label { display: block; font-size: 11px; color: #666; margin-bottom: 4px; }
+        .control-group select, .control-group input {
+            width: 100%;
+            padding: 8px;
+            background: #0f3460;
+            border: 1px solid #2a4a6a;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+        }
+        .control-group select:focus, .control-group input:focus {
+            outline: none;
+            border-color: #00d9ff;
         }
 
-        /* Modal */
+        /* Status indicators */
+        .status-row {
+            display: flex;
+            gap: 15px;
+            padding: 10px;
+            background: #0f3460;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            font-size: 12px;
+        }
+        .status-item { display: flex; align-items: center; gap: 6px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-dot.green { background: #00ff88; }
+        .status-dot.yellow { background: #ffaa00; }
+        .status-dot.red { background: #ff4444; }
+
+        /* Link list */
+        .link-item {
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+        .link-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .link-name { font-weight: 600; }
+        .link-stats { display: flex; gap: 10px; color: #888; font-size: 11px; }
+        .link-stats span { display: flex; align-items: center; gap: 4px; }
+
+        /* Position editor modal */
         .modal {
             display: none;
             position: fixed;
@@ -170,125 +210,97 @@ HTML_TEMPLATE = """
             background: #16213e;
             border-radius: 12px;
             padding: 24px;
-            min-width: 420px;
+            min-width: 350px;
         }
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        .modal-close {
-            background: none;
-            border: none;
-            color: #666;
-            font-size: 24px;
-            cursor: pointer;
-        }
-        .modal-close:hover { color: #fff; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-close { background: none; border: none; color: #666; font-size: 24px; cursor: pointer; }
 
-        /* Form */
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 12px;
-        }
-        .form-group { margin-bottom: 12px; }
-        .form-group label {
-            display: block;
-            margin-bottom: 6px;
-            color: #888;
-            font-size: 12px;
-        }
-        .form-group input {
-            width: 100%;
-            padding: 10px;
-            background: #0f3460;
-            border: 1px solid #2a4a6a;
-            border-radius: 6px;
-            color: #fff;
-            font-size: 14px;
-        }
-        .form-group input:focus {
-            outline: none;
-            border-color: #00d9ff;
-        }
-
-        /* Presets */
-        .presets {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
-        .preset {
-            padding: 8px 14px;
-            background: #0f3460;
-            border: 1px solid #2a4a6a;
-            border-radius: 6px;
-            color: #aaa;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .preset:hover { background: #1a4a7a; color: #fff; border-color: #00d9ff; }
-
-        /* Buttons */
-        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
         .btn {
-            padding: 10px 20px;
+            padding: 8px 16px;
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s;
+            font-size: 13px;
         }
-        .btn-primary { background: #00d9ff; color: #000; font-weight: 600; }
+        .btn-primary { background: #00d9ff; color: #000; }
         .btn-primary:hover { background: #00b8d9; }
-        .btn-danger { background: #ff4444; color: #fff; }
-        .btn-danger:hover { background: #cc3333; }
-        .btn-secondary { background: #333; color: #fff; }
-        .btn-secondary:hover { background: #444; }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
 
         /* Legend */
-        .legend {
-            display: flex;
-            gap: 20px;
-            margin-top: 15px;
-            font-size: 12px;
-            color: #666;
-        }
-        .legend-item { display: flex; align-items: center; gap: 6px; }
-        .legend-line {
-            width: 20px;
-            height: 3px;
-            border-radius: 2px;
-        }
+        .legend { display: flex; gap: 15px; margin-top: 10px; font-size: 11px; color: #666; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-line { width: 20px; height: 3px; border-radius: 2px; }
         .legend-line.good { background: #00ff88; }
         .legend-line.degraded { background: #ffaa00; }
         .legend-line.bad { background: #ff4444; }
-        .legend-line.down { background: #444; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>MANET Chaos Simulator</h1>
-        <p class="subtitle">Click on links to inject network chaos (latency, packet loss, bandwidth limits)</p>
+        <p class="subtitle">Position-based degradation | Shared radio bandwidth | Environment profiles</p>
 
         <div class="main-layout">
-            <div class="topology">
-                <h2>Network Topology</h2>
-                <svg id="topology-svg"></svg>
-                <div class="legend">
-                    <div class="legend-item"><div class="legend-line good"></div> Good (&lt;50ms)</div>
-                    <div class="legend-item"><div class="legend-line degraded"></div> Degraded (50-200ms)</div>
-                    <div class="legend-item"><div class="legend-line bad"></div> Bad (&gt;200ms)</div>
-                    <div class="legend-item"><div class="legend-line down"></div> Down</div>
+            <div>
+                <div class="panel topology">
+                    <h2>Network Topology</h2>
+                    <svg id="topology-svg" viewBox="0 0 600 380"></svg>
+                    <div class="zoom-controls">
+                        <button class="zoom-btn" onclick="zoomIn()" title="Zoom in">+</button>
+                        <button class="zoom-btn" onclick="zoomOut()" title="Zoom out">−</button>
+                        <button class="zoom-btn" onclick="resetZoom()" title="Reset">⌂</button>
+                        <div class="zoom-level" id="zoom-level">100%</div>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item"><div class="legend-line good"></div> Good (&lt;50ms)</div>
+                        <div class="legend-item"><div class="legend-line degraded"></div> Degraded</div>
+                        <div class="legend-item"><div class="legend-line bad"></div> Bad/Unreachable</div>
+                    </div>
                 </div>
             </div>
 
             <div class="side-panel">
+                <div class="panel">
+                    <h2>Network Settings</h2>
+                    <div class="control-row">
+                        <div class="control-group">
+                            <label>Topology</label>
+                            <select id="topology-select" onchange="setTopology(this.value)">
+                                <option value="mesh">Mesh (all-to-all)</option>
+                                <option value="star">Star (via base station)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="control-row">
+                        <div class="control-group">
+                            <label>Environment</label>
+                            <select id="environment-select" onchange="setEnvironment(this.value)">
+                                <option value="clear">Clear</option>
+                                <option value="humid">Humid</option>
+                                <option value="light_rain">Light Rain</option>
+                                <option value="heavy_rain">Heavy Rain</option>
+                                <option value="storm">Storm</option>
+                                <option value="fog">Fog</option>
+                                <option value="urban">Urban</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="status-row">
+                        <div class="status-item">
+                            <span class="status-dot green"></span>
+                            <span id="status-bw">1000 kbps</span>
+                        </div>
+                        <div class="status-item">
+                            <span id="status-drones">3 drones</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2>Node Traffic</h2>
+                    <div id="node-stats" class="node-stats"></div>
+                </div>
+
                 <div class="panel">
                     <h2>Links</h2>
                     <div id="links-list"></div>
@@ -297,278 +309,457 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Chaos Modal -->
-    <div class="modal" id="chaos-modal">
+    <!-- Position Editor Modal -->
+    <div class="modal" id="position-modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 id="modal-title">Configure Link</h2>
+                <h2 id="modal-title">Set Position</h2>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
-
-            <div class="presets">
-                <button class="preset" onclick="applyPreset('clear')">Clear</button>
-                <button class="preset" onclick="applyPreset('good')">Good Link</button>
-                <button class="preset" onclick="applyPreset('degraded')">Degraded</button>
-                <button class="preset" onclick="applyPreset('bad')">Bad Link</button>
-                <button class="preset" onclick="applyPreset('lossy')">Lossy (30%)</button>
-                <button class="preset" onclick="applyPreset('partition')">Partition</button>
-            </div>
-
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Latency (ms)</label>
-                    <input type="number" id="latency-input" value="0" min="0">
+            <div class="control-row">
+                <div class="control-group">
+                    <label>X (meters)</label>
+                    <input type="number" id="pos-x" value="0">
                 </div>
-                <div class="form-group">
-                    <label>Jitter (ms)</label>
-                    <input type="number" id="jitter-input" value="0" min="0">
+                <div class="control-group">
+                    <label>Y (meters)</label>
+                    <input type="number" id="pos-y" value="0">
                 </div>
             </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Packet Loss (%)</label>
-                    <input type="number" id="loss-input" value="0" min="0" max="100">
-                </div>
-                <div class="form-group">
-                    <label>Bandwidth (kbit/s, 0=unlimited)</label>
-                    <input type="number" id="rate-input" value="0" min="0">
+            <div class="control-row">
+                <div class="control-group">
+                    <label>Z / Altitude (meters)</label>
+                    <input type="number" id="pos-z" value="50">
                 </div>
             </div>
-
-            <div class="btn-group">
-                <button class="btn btn-primary" onclick="applyChaos()">Apply</button>
-                <button class="btn btn-danger" onclick="clearChaos()">Clear Chaos</button>
-                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <div style="margin-top: 15px;">
+                <button class="btn btn-primary" onclick="savePosition()">Save Position</button>
             </div>
         </div>
     </div>
 
     <script>
         const DRONE_COUNT = {{ drone_count }};
+        const CONFIG = {{ config | tojson }};
+
+        let metrics = {};
         let links = [];
-        let selectedLink = null;
+        let selectedDrone = null;
+        let currentTopology = 'mesh';
+        let currentEnvironment = 'clear';
 
-        // Calculate drone positions in a circle
-        function getDronePositions() {
-            const positions = {};
-            const centerX = 300, centerY = 225;
-            const radius = 150;
+        // Zoom and pan state
+        let zoom = 1;
+        let panX = 0;
+        let panY = 0;
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragStartPanX = 0;
+        let dragStartPanY = 0;
 
-            for (let i = 1; i <= DRONE_COUNT; i++) {
-                const angle = (2 * Math.PI * (i - 1) / DRONE_COUNT) - Math.PI / 2;
-                positions[i] = {
-                    x: centerX + radius * Math.cos(angle),
-                    y: centerY + radius * Math.sin(angle)
+        const MIN_ZOOM = 0.25;
+        const MAX_ZOOM = 4;
+        const ZOOM_STEP = 0.2;
+
+        // Base positions (before zoom/pan transforms)
+        const BASE_CENTER_X = 300, BASE_CENTER_Y = 190;
+        const BASE_RADIUS = 120;  // Default circular layout radius
+        const BASE_SCALE = 0.5;   // Real-world to pixel scale
+
+        // Calculate base position for a drone (before zoom/pan)
+        function getBasePosition(pos, droneId) {
+            if (!pos || (pos.x === 0 && pos.y === 0)) {
+                // Default circular layout if no position set
+                const angle = (2 * Math.PI * (droneId - 1) / DRONE_COUNT) - Math.PI / 2;
+                return {
+                    x: BASE_CENTER_X + BASE_RADIUS * Math.cos(angle),
+                    y: BASE_CENTER_Y + BASE_RADIUS * Math.sin(angle)
                 };
             }
-            return positions;
+
+            return {
+                x: BASE_CENTER_X + pos.x * BASE_SCALE,
+                y: BASE_CENTER_Y - pos.y * BASE_SCALE  // Flip Y for screen coords
+            };
         }
 
-        const dronePositions = getDronePositions();
+        // Apply semantic zoom transform to a position
+        // Positions scale with zoom, but sizes stay constant
+        function applyZoomTransform(basePos) {
+            // Zoom around center of SVG
+            const zoomCenterX = 300 + panX;
+            const zoomCenterY = 190 + panY;
 
-        async function fetchLinks() {
+            return {
+                x: zoomCenterX + (basePos.x - 300) * zoom,
+                y: zoomCenterY + (basePos.y - 190) * zoom
+            };
+        }
+
+        // Format bytes to human readable
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B/s';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB/s';
+            return (bytes / 1024 / 1024).toFixed(1) + ' MB/s';
+        }
+
+        async function fetchMetrics() {
             try {
-                const resp = await fetch('/api/links');
-                links = await resp.json();
-                render();
+                const resp = await fetch('/api/metrics');
+                metrics = await resp.json();
+                updateUI();
             } catch (e) {
-                console.error('Failed to fetch links:', e);
+                console.error('Failed to fetch metrics:', e);
             }
+        }
+
+        function updateUI() {
+            // Update status from first drone's metrics
+            const firstDrone = metrics[1] || {};
+            currentTopology = firstDrone.topology || 'mesh';
+            currentEnvironment = firstDrone.environment || 'clear';
+
+            document.getElementById('topology-select').value = currentTopology;
+            document.getElementById('environment-select').value = currentEnvironment;
+            document.getElementById('status-bw').textContent = (firstDrone.bandwidth_kbps || 1000) + ' kbps';
+            document.getElementById('status-drones').textContent = DRONE_COUNT + ' drones';
+
+            // Build links array from metrics
+            links = [];
+            for (const [droneId, data] of Object.entries(metrics)) {
+                const probes = data.probes || {};
+                for (const [targetId, probe] of Object.entries(probes)) {
+                    links.push({
+                        source: parseInt(droneId),
+                        target: parseInt(targetId),
+                        ping_ms: probe.ping_ms,
+                        tcp_ok: probe.tcp_ok,
+                        udp_ok: probe.udp_ok,
+                        distance_m: probe.distance_m || 0,
+                        reachable: probe.reachable !== false,
+                        position: data.position || {},
+                        tx_bytes_sec: probe.tx_bytes_sec || 0,
+                        tx_packets_sec: probe.tx_packets_sec || 0,
+                    });
+                }
+            }
+
+            renderTopology();
+            renderLinksList();
+            renderNodeStats();
         }
 
         function getLinkStatus(link) {
-            if (link.ping_ms < 0) return 'down';
-            if (link.ping_ms > 200) return 'bad';
-            if (link.ping_ms > 50) return 'degraded';
+            if (!link.reachable || link.ping_ms < 0) return 'down';
+            if (link.ping_ms > 100) return 'bad';
+            if (link.ping_ms > 30) return 'degraded';
             return 'good';
-        }
-
-        function hasActiveChaos(link) {
-            const c = link.chaos || {};
-            return c.latency_ms > 0 || c.loss_percent > 0 || c.rate_kbit > 0;
-        }
-
-        function render() {
-            renderTopology();
-            renderLinksList();
         }
 
         function renderTopology() {
             const svg = document.getElementById('topology-svg');
-            let html = '';
+            let content = '';
 
-            // Draw links
+            // Get base positions (before zoom)
+            const basePositions = {};
+            for (let i = 1; i <= DRONE_COUNT; i++) {
+                const droneMetrics = metrics[i] || {};
+                basePositions[i] = getBasePosition(droneMetrics.position, i);
+            }
+
+            // Base station at center (if star topology)
+            if (currentTopology === 'star') {
+                basePositions[0] = { x: BASE_CENTER_X, y: BASE_CENTER_Y };
+            }
+
+            // Apply zoom transform to get display positions
+            const positions = {};
+            for (const [id, basePos] of Object.entries(basePositions)) {
+                positions[id] = applyZoomTransform(basePos);
+            }
+
+            // Draw links (sizes stay constant, positions change with zoom)
             const drawnLinks = new Set();
             for (const link of links) {
                 const key = [link.source, link.target].sort().join('-');
                 if (drawnLinks.has(key)) continue;
 
-                const from = dronePositions[link.source];
-                const to = dronePositions[link.target];
+                const from = positions[link.source];
+                const to = positions[link.target];
                 if (!from || !to) continue;
 
-                // Find reverse link
-                const reverseLink = links.find(l => l.source === link.target && l.target === link.source);
-                const status1 = getLinkStatus(link);
-                const status2 = reverseLink ? getLinkStatus(reverseLink) : 'down';
+                const status = getLinkStatus(link);
 
-                // Use worst status for line color
-                const worstStatus = status1 === 'down' || status2 === 'down' ? 'down' :
-                    status1 === 'bad' || status2 === 'bad' ? 'bad' :
-                    status1 === 'degraded' || status2 === 'degraded' ? 'degraded' : 'good';
-
-                // Draw main line
-                const midX = (from.x + to.x) / 2;
-                const midY = (from.y + to.y) / 2;
-
-                html += `<line class="link ${worstStatus}"
-                    x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"
-                    stroke-width="4"
-                    onclick="selectLink(${link.source}, ${link.target})"
-                    data-src="${link.source}" data-dst="${link.target}"/>`;
-
-                // Draw metrics label
-                const ping1 = link.ping_ms >= 0 ? link.ping_ms.toFixed(0) + 'ms' : '---';
-                const ping2 = reverseLink && reverseLink.ping_ms >= 0 ? reverseLink.ping_ms.toFixed(0) + 'ms' : '---';
-
-                // Offset label perpendicular to line
+                // Offset for bidirectional (constant offset regardless of zoom)
                 const dx = to.x - from.x;
                 const dy = to.y - from.y;
-                const len = Math.sqrt(dx*dx + dy*dy);
-                const ox = -dy/len * 15;
-                const oy = dx/len * 15;
+                const len = Math.sqrt(dx*dx + dy*dy) || 1;
+                const ox = -dy/len * 6;
+                const oy = dx/len * 6;
 
-                html += `<text class="link-metrics ${worstStatus === 'bad' ? 'bad' : ''}"
-                    x="${midX + ox}" y="${midY + oy}"
-                    text-anchor="middle">${ping1} / ${ping2}</text>`;
+                content += `<line class="link ${status}"
+                    x1="${from.x + ox}" y1="${from.y + oy}"
+                    x2="${to.x + ox}" y2="${to.y + oy}"
+                    stroke-width="3"/>`;
+
+                // Distance and traffic label
+                const midX = (from.x + to.x) / 2 + ox;
+                const midY = (from.y + to.y) / 2 + oy;
+                const dist = link.distance_m > 0 ? Math.round(link.distance_m) + 'm' : '';
+                const traffic = link.tx_bytes_sec > 0 ? formatBytes(link.tx_bytes_sec) : '';
+
+                content += `<text class="link-label" x="${midX}" y="${midY - 8}" text-anchor="middle">${dist}</text>`;
+                if (traffic) {
+                    content += `<text class="link-traffic" x="${midX}" y="${midY + 4}" text-anchor="middle">${traffic}</text>`;
+                }
 
                 drawnLinks.add(key);
             }
 
-            // Draw drone nodes
-            for (let i = 1; i <= DRONE_COUNT; i++) {
-                const pos = dronePositions[i];
-                html += `<g class="drone" transform="translate(${pos.x},${pos.y})">
-                    <circle r="35"/>
-                    <text y="2">D${i}</text>
+            // Draw base station (star topology) - size stays constant
+            if (currentTopology === 'star') {
+                const bsPos = positions[0];
+                content += `<g class="drone base" transform="translate(${bsPos.x},${bsPos.y})" onclick="editPosition(0)">
+                    <circle r="25"/>
+                    <text y="2">BS</text>
                 </g>`;
             }
 
-            svg.innerHTML = html;
+            // Draw drones - sizes stay constant, positions change with zoom
+            for (let i = 1; i <= DRONE_COUNT; i++) {
+                const pos = positions[i];
+                const realPos = metrics[i]?.position || {};
+                const posLabel = realPos.x !== undefined ? `(${realPos.x}, ${realPos.y})` : '';
+
+                content += `<g class="drone" transform="translate(${pos.x},${pos.y})" onclick="editPosition(${i})">
+                    <circle r="28"/>
+                    <text y="0">D${i}</text>
+                    <text class="pos-label" y="40">${posLabel}</text>
+                </g>`;
+            }
+
+            svg.innerHTML = content;
         }
+
+        function updateTransform() {
+            // Re-render topology with new zoom/pan values
+            renderTopology();
+            document.getElementById('zoom-level').textContent = Math.round(zoom * 100) + '%';
+        }
+
+        function zoomIn() {
+            zoom = Math.min(MAX_ZOOM, zoom + ZOOM_STEP);
+            updateTransform();
+        }
+
+        function zoomOut() {
+            zoom = Math.max(MIN_ZOOM, zoom - ZOOM_STEP);
+            updateTransform();
+        }
+
+        function resetZoom() {
+            zoom = 1;
+            panX = 0;
+            panY = 0;
+            updateTransform();
+        }
+
+        // Mouse wheel zoom
+        document.addEventListener('DOMContentLoaded', () => {
+            const svg = document.getElementById('topology-svg');
+
+            svg.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+                const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + delta));
+
+                // Zoom toward mouse position
+                const rect = svg.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                // Convert to SVG coordinates
+                const svgX = (mouseX / rect.width) * 600;
+                const svgY = (mouseY / rect.height) * 380;
+
+                // Adjust pan to zoom toward mouse
+                const zoomRatio = newZoom / zoom;
+                panX = svgX - (svgX - panX) * zoomRatio;
+                panY = svgY - (svgY - panY) * zoomRatio;
+
+                zoom = newZoom;
+                updateTransform();
+            }, { passive: false });
+
+            // Mouse drag pan
+            svg.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                // Don't start drag if clicking on a drone
+                if (e.target.closest('.drone')) return;
+
+                isDragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                dragStartPanX = panX;
+                dragStartPanY = panY;
+                svg.classList.add('dragging');
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+
+                const svg = document.getElementById('topology-svg');
+                const rect = svg.getBoundingClientRect();
+
+                // Convert pixel movement to SVG units
+                const dx = (e.clientX - dragStartX) * (600 / rect.width);
+                const dy = (e.clientY - dragStartY) * (380 / rect.height);
+
+                panX = dragStartPanX + dx;
+                panY = dragStartPanY + dy;
+                updateTransform();
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isDragging) {
+                    isDragging = false;
+                    document.getElementById('topology-svg').classList.remove('dragging');
+                }
+            });
+        });
 
         function renderLinksList() {
             const list = document.getElementById('links-list');
             let html = '';
 
-            // Group by source drone
-            for (let src = 1; src <= DRONE_COUNT; src++) {
-                const srcLinks = links.filter(l => l.source === src);
-                for (const link of srcLinks) {
-                    const status = getLinkStatus(link);
-                    const hasChaos = hasActiveChaos(link);
-                    const chaos = link.chaos || {};
+            for (const link of links) {
+                const status = getLinkStatus(link);
+                const pingStr = link.ping_ms >= 0 ? link.ping_ms.toFixed(1) + 'ms' : 'DOWN';
+                const distStr = link.distance_m > 0 ? Math.round(link.distance_m) + 'm' : '-';
+                const trafficStr = link.tx_bytes_sec > 0 ? formatBytes(link.tx_bytes_sec) : '-';
+                const pktStr = link.tx_packets_sec > 0 ? link.tx_packets_sec + ' pkt/s' : '-';
 
-                    html += `<div class="link-item" onclick="selectLink(${link.source}, ${link.target})">
-                        <div class="link-header">
-                            <span class="link-name">D${link.source} → D${link.target}</span>
-                            ${hasChaos ? `<span class="chaos-badge">CHAOS</span>` : ''}
-                        </div>
-                        <div class="link-stats">
-                            <div class="metric">
-                                <span class="status-dot ${status === 'down' ? 'bad' : 'good'}"></span>
-                                PING: <span class="value ${status === 'down' ? 'bad' : ''}">${link.ping_ms >= 0 ? link.ping_ms.toFixed(1) + 'ms' : 'DOWN'}</span>
-                            </div>
-                            <div class="metric">
-                                <span class="status-dot ${link.tcp_ok ? 'good' : 'bad'}"></span>
-                                TCP
-                            </div>
-                            <div class="metric">
-                                <span class="status-dot ${link.udp_ok ? 'good' : 'bad'}"></span>
-                                UDP
-                            </div>
-                        </div>
-                    </div>`;
-                }
+                html += `<div class="link-item">
+                    <div class="link-header">
+                        <span class="link-name">D${link.source} → ${link.target === 0 ? 'BS' : 'D' + link.target}</span>
+                        <span style="color:#666;font-size:10px">${trafficStr}</span>
+                    </div>
+                    <div class="link-stats">
+                        <span><span class="status-dot ${status === 'good' ? 'green' : status === 'degraded' ? 'yellow' : 'red'}"></span>${pingStr}</span>
+                        <span>TCP: ${link.tcp_ok ? '✓' : '✗'}</span>
+                        <span>UDP: ${link.udp_ok ? '✓' : '✗'}</span>
+                        <span>${distStr}</span>
+                        <span>${pktStr}</span>
+                    </div>
+                </div>`;
             }
 
             list.innerHTML = html || '<div style="color:#666">Waiting for data...</div>';
         }
 
-        function selectLink(src, dst) {
-            selectedLink = { source: src, target: dst };
-            const link = links.find(l => l.source === src && l.target === dst);
-            const chaos = link?.chaos || {};
+        function renderNodeStats() {
+            const container = document.getElementById('node-stats');
+            let html = '';
 
-            document.getElementById('modal-title').textContent = `Configure D${src} → D${dst}`;
-            document.getElementById('latency-input').value = chaos.latency_ms || 0;
-            document.getElementById('jitter-input').value = chaos.jitter_ms || 0;
-            document.getElementById('loss-input').value = chaos.loss_percent || 0;
-            document.getElementById('rate-input').value = chaos.rate_kbit || 0;
+            for (let i = 1; i <= DRONE_COUNT; i++) {
+                const data = metrics[i] || {};
+                const traffic = data.traffic || {};
+                const load = traffic.load_percent || 0;
+                const txRate = traffic.tx_bytes_sec || 0;
+                const rxRate = traffic.rx_bytes_sec || 0;
+                const txPkt = traffic.tx_packets_sec || 0;
+                const rxPkt = traffic.rx_packets_sec || 0;
 
-            document.getElementById('chaos-modal').classList.add('active');
+                let loadClass = 'low';
+                if (load > 70) loadClass = 'high';
+                else if (load > 30) loadClass = 'medium';
+
+                html += `<div class="node-stat-item">
+                    <div class="node-stat-header">
+                        <span class="node-stat-name">Drone ${i}</span>
+                        <span class="node-stat-load ${loadClass}">${load.toFixed(1)}% load</span>
+                    </div>
+                    <div class="node-stat-details">
+                        <span>↑ ${formatBytes(txRate)}</span>
+                        <span>↓ ${formatBytes(rxRate)}</span>
+                        <span>${txPkt + rxPkt} pkt/s</span>
+                    </div>
+                </div>`;
+            }
+
+            container.innerHTML = html || '<div style="color:#666">Waiting for data...</div>';
+        }
+
+        function editPosition(droneId) {
+            selectedDrone = droneId;
+            const pos = metrics[droneId]?.position || { x: 0, y: 0, z: 50 };
+
+            document.getElementById('modal-title').textContent =
+                droneId === 0 ? 'Base Station Position' : `Drone ${droneId} Position`;
+            document.getElementById('pos-x').value = pos.x || 0;
+            document.getElementById('pos-y').value = pos.y || 0;
+            document.getElementById('pos-z').value = pos.z || 50;
+
+            document.getElementById('position-modal').classList.add('active');
         }
 
         function closeModal() {
-            document.getElementById('chaos-modal').classList.remove('active');
-            selectedLink = null;
+            document.getElementById('position-modal').classList.remove('active');
+            selectedDrone = null;
         }
 
-        function applyPreset(preset) {
-            const presets = {
-                'clear': { latency: 0, jitter: 0, loss: 0, rate: 0 },
-                'good': { latency: 10, jitter: 5, loss: 0, rate: 0 },
-                'degraded': { latency: 100, jitter: 30, loss: 5, rate: 0 },
-                'bad': { latency: 500, jitter: 100, loss: 10, rate: 100 },
-                'lossy': { latency: 50, jitter: 20, loss: 30, rate: 0 },
-                'partition': { latency: 0, jitter: 0, loss: 100, rate: 0 },
-            };
-            const p = presets[preset];
-            document.getElementById('latency-input').value = p.latency;
-            document.getElementById('jitter-input').value = p.jitter;
-            document.getElementById('loss-input').value = p.loss;
-            document.getElementById('rate-input').value = p.rate;
-        }
+        async function savePosition() {
+            if (selectedDrone === null) return;
 
-        async function applyChaos() {
-            if (!selectedLink) return;
-
-            const params = {
-                latency_ms: parseInt(document.getElementById('latency-input').value) || 0,
-                jitter_ms: parseInt(document.getElementById('jitter-input').value) || 0,
-                loss_percent: parseInt(document.getElementById('loss-input').value) || 0,
-                rate_kbit: parseInt(document.getElementById('rate-input').value) || 0,
+            const pos = {
+                x: parseFloat(document.getElementById('pos-x').value) || 0,
+                y: parseFloat(document.getElementById('pos-y').value) || 0,
+                z: parseFloat(document.getElementById('pos-z').value) || 50,
             };
 
             try {
-                await fetch(`/api/chaos/${selectedLink.source}/${selectedLink.target}`, {
+                await fetch(`/api/position/${selectedDrone}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(params)
+                    body: JSON.stringify(pos)
                 });
                 closeModal();
-                setTimeout(fetchLinks, 500);
+                setTimeout(fetchMetrics, 500);
             } catch (e) {
-                console.error('Failed to apply chaos:', e);
+                console.error('Failed to set position:', e);
             }
         }
 
-        async function clearChaos() {
-            if (!selectedLink) return;
+        async function setTopology(mode) {
             try {
-                await fetch(`/api/chaos/${selectedLink.source}/${selectedLink.target}`, {
-                    method: 'DELETE'
+                await fetch('/api/topology', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
                 });
-                closeModal();
-                setTimeout(fetchLinks, 500);
+                setTimeout(fetchMetrics, 500);
             } catch (e) {
-                console.error('Failed to clear chaos:', e);
+                console.error('Failed to set topology:', e);
+            }
+        }
+
+        async function setEnvironment(profile) {
+            try {
+                await fetch('/api/environment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ profile })
+                });
+                setTimeout(fetchMetrics, 500);
+            } catch (e) {
+                console.error('Failed to set environment:', e);
             }
         }
 
         // Initial load and refresh
-        fetchLinks();
-        setInterval(fetchLinks, 2000);
+        fetchMetrics();
+        setInterval(fetchMetrics, 2000);
     </script>
 </body>
 </html>
@@ -578,52 +769,23 @@ HTML_TEMPLATE = """
 def get_all_metrics():
     """Read metrics from all drones."""
     metrics = {}
-    for i in range(1, DRONE_COUNT + 1):
+    for i in range(0, DRONE_COUNT + 1):  # Include base station (0)
         metrics_file = METRICS_DIR / f"drone{i}.json"
         if metrics_file.exists():
             try:
                 with open(metrics_file) as f:
                     data = json.load(f)
-                    # Check if data is stale (>10 seconds old)
-                    if time.time() - data.get("timestamp", 0) < 10:
+                    if time.time() - data.get("timestamp", 0) < 15:
                         metrics[i] = data
             except (json.JSONDecodeError, IOError):
                 pass
     return metrics
 
 
-def build_links():
-    """Build link data from metrics."""
-    metrics = get_all_metrics()
-    links = []
-
-    for src_id, src_data in metrics.items():
-        probes = src_data.get("probes", {})
-        chaos = src_data.get("chaos", {})
-
-        for dst_id_str, probe_data in probes.items():
-            dst_id = int(dst_id_str)
-            link = {
-                "source": src_id,
-                "target": dst_id,
-                "ping_ms": probe_data.get("ping_ms", -1),
-                "tcp_ok": probe_data.get("tcp_ok", False),
-                "udp_ok": probe_data.get("udp_ok", False),
-                "chaos": chaos.get(str(dst_id), chaos.get(dst_id, {})),
-            }
-            links.append(link)
-
-    return links
-
-
 @app.route("/")
 def index():
-    return render_template_string(HTML_TEMPLATE, drone_count=DRONE_COUNT)
-
-
-@app.route("/api/links")
-def api_links():
-    return jsonify(build_links())
+    config = load_config()
+    return render_template_string(HTML_TEMPLATE, drone_count=DRONE_COUNT, config=config)
 
 
 @app.route("/api/metrics")
@@ -631,19 +793,81 @@ def api_metrics():
     return jsonify(get_all_metrics())
 
 
-@app.route("/api/chaos/<int:src>/<int:dst>", methods=["POST", "DELETE"])
-def api_chaos(src, dst):
-    """Proxy chaos control to the source drone's radio."""
-    radio_url = f"http://drone{src}_radio:8080/chaos/{dst}"
+@app.route("/api/config")
+def api_config():
+    return jsonify(load_config())
+
+
+@app.route("/api/position/<int:drone_id>", methods=["POST"])
+def api_set_position(drone_id):
+    """Set a drone's position (broadcasts to all drones)."""
+    data = request.json
+    results = []
+
+    # Send to the target drone
+    if drone_id == 0:
+        url = "http://base_station_radio:8080/position"
+    else:
+        url = f"http://drone{drone_id}_radio:8080/position"
 
     try:
-        if request.method == "POST":
-            resp = requests.post(radio_url, json=request.json, timeout=5)
-        else:
-            resp = requests.delete(radio_url, timeout=5)
-        return jsonify(resp.json()), resp.status_code
+        resp = requests.post(url, json=data, timeout=5)
+        results.append({"drone": drone_id, "ok": resp.ok})
     except requests.RequestException as e:
-        return jsonify({"error": str(e)}), 500
+        results.append({"drone": drone_id, "error": str(e)})
+
+    # Also update other drones about this position change
+    for i in range(1, DRONE_COUNT + 1):
+        if i == drone_id:
+            continue
+        try:
+            resp = requests.post(
+                f"http://drone{i}_radio:8080/positions/{drone_id}",
+                json=data, timeout=2
+            )
+        except requests.RequestException:
+            pass
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/topology", methods=["POST"])
+def api_set_topology():
+    """Set topology mode for all drones."""
+    data = request.json
+    results = []
+
+    # Set on all drones
+    for i in range(1, DRONE_COUNT + 1):
+        try:
+            resp = requests.post(
+                f"http://drone{i}_radio:8080/topology",
+                json=data, timeout=5
+            )
+            results.append({"drone": i, "ok": resp.ok})
+        except requests.RequestException as e:
+            results.append({"drone": i, "error": str(e)})
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/environment", methods=["POST"])
+def api_set_environment():
+    """Set environment profile for all drones."""
+    data = request.json
+    results = []
+
+    for i in range(1, DRONE_COUNT + 1):
+        try:
+            resp = requests.post(
+                f"http://drone{i}_radio:8080/environment",
+                json=data, timeout=5
+            )
+            results.append({"drone": i, "ok": resp.ok})
+        except requests.RequestException as e:
+            results.append({"drone": i, "error": str(e)})
+
+    return jsonify({"results": results})
 
 
 if __name__ == "__main__":

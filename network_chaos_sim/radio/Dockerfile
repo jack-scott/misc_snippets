@@ -1,10 +1,11 @@
 FROM python:3.11-alpine
 
-# Install networking tools for tc netem and probes
 RUN apk add --no-cache \
     iproute2 \
     iputils \
     iptables
+
+RUN pip install --no-cache-dir pyyaml
 
 WORKDIR /app
 COPY radio.py .

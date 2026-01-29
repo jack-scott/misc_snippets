@@ -1,28 +1,26 @@
-# Radio Infrastructure - DO NOT MODIFY
+# Base Station - Used in star topology
 #
-# This provides the MANET radio interface for your drone.
-# Your drone software goes in compose.app.yml
-# Configure radio settings in ../config.yaml
+# The base station acts as the central hub that all drones communicate through.
+# In star topology, drones can only reach the base station, not each other directly.
 
 services:
   radio:
     build:
       context: ../radio
-    container_name: drone${DRONE_ID}_radio
-    hostname: drone${DRONE_ID}_radio
+    container_name: base_station_radio
+    hostname: base_station
     cap_add:
       - NET_ADMIN
     environment:
-      - DRONE_ID=${DRONE_ID}
+      - DRONE_ID=0
       - DRONE_COUNT=${DRONE_COUNT}
     volumes:
       - manet_metrics:/metrics
       - ../config.yaml:/config/config.yaml:ro
     networks:
       manet:
-        ipv4_address: 172.31.0.1${DRONE_ID}
+        ipv4_address: 172.31.0.10
       control:
-      internal:
 
 networks:
   manet:
@@ -32,9 +30,6 @@ networks:
   control:
     name: manet_control
     external: true
-
-  internal:
-    name: drone${DRONE_ID}_internal
 
 volumes:
   manet_metrics:
