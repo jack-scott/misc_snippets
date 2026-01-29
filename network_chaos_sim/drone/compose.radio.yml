@@ -1,0 +1,42 @@
+# Radio Infrastructure - DO NOT MODIFY
+#
+# This provides the MANET radio interface for your drone.
+# Your drone software goes in compose.app.yml
+#
+# Usage: Included automatically by launch.py
+
+services:
+  radio:
+    build:
+      context: ../radio
+    container_name: drone${DRONE_ID}_radio
+    hostname: drone${DRONE_ID}_radio
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+    volumes:
+      - manet_metrics:/metrics
+    networks:
+      manet:
+        ipv4_address: 172.31.0.1${DRONE_ID}
+      control:
+      internal:
+
+networks:
+  manet:
+    name: manet_mesh
+    external: true
+
+  control:
+    name: manet_control
+    external: true
+
+  internal:
+    name: drone${DRONE_ID}_internal
+
+volumes:
+  manet_metrics:
+    name: manet_metrics
+    external: true

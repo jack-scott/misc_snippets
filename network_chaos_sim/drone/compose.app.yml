@@ -1,0 +1,56 @@
+# Drone Software - CUSTOMIZE THIS FILE
+#
+# Add your drone services here. They will be launched alongside the radio.
+#
+# Available networks:
+#   - internal: Local drone network (no chaos, for inter-service comms)
+#
+# To reach other drones:
+#   - Ping/UDP/TCP to 172.31.0.1X where X is the drone ID
+#   - Or use hostname: drone{X}_radio
+#
+# Environment variables available:
+#   - DRONE_ID: This drone's ID (1, 2, 3, ...)
+#   - DRONE_COUNT: Total number of drones
+
+services:
+  # ===========================================
+  # YOUR DRONE SOFTWARE HERE
+  # ===========================================
+
+  app:
+    image: alpine:latest
+    container_name: drone${DRONE_ID}_app
+    hostname: drone${DRONE_ID}
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl
+        echo "Drone ${DRONE_ID} starting..."
+        echo "Other drones at: 172.31.0.1X (X=drone ID)"
+        # Your application logic here
+        tail -f /dev/null
+    networks:
+      - internal
+    depends_on:
+      - radio
+
+  # Example: Add more services as needed
+  #
+  # ros_node:
+  #   image: ros:humble
+  #   container_name: drone${DRONE_ID}_ros
+  #   environment:
+  #     - ROS_DOMAIN_ID=${DRONE_ID}
+  #   networks:
+  #     - internal
+  #   depends_on:
+  #     - radio
+
+networks:
+  internal:
+    name: drone${DRONE_ID}_internal

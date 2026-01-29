@@ -1,0 +1,26 @@
+# MANET Chaos Simulator - Control Plane
+#
+# Creates shared infrastructure. Drones are launched separately.
+# Usage: ./launch.py 3
+
+services:
+  ui:
+    build:
+      context: ./ui
+    container_name: manet_ui
+    ports:
+      - "8080:8080"
+    environment:
+      - DRONE_COUNT=${DRONE_COUNT:-3}
+    volumes:
+      - manet_metrics:/metrics:ro
+    networks:
+      - control
+
+networks:
+  control:
+    name: manet_control
+
+volumes:
+  manet_metrics:
+    name: manet_metrics
