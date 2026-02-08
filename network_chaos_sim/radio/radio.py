@@ -65,6 +65,9 @@ class State:
     topology = "mesh"
     link_quality = {}  # drone_id -> {latency_ms, loss_percent, bandwidth_kbps}
     link_overrides = {}  # drone_id -> {extra_latency_ms, extra_loss_percent, partition}
+    direct_link_params = {}  # {delay_ms, loss_pct, rate_kbit} - absolute override from controller API
+    link_down = False  # True = simulate drone out of range (100% loss)
+    bandwidth_override = None  # Optional runtime bandwidth override (kbit)
     # Traffic stats
     prev_traffic = {}  # For rate calculation
     prev_time = 0
@@ -328,7 +331,9 @@ def calculate_link_quality(target_id):
     return quality
 
 def get_radio_bandwidth():
-    """Get effective radio bandwidth considering environment."""
+    """Get effective radio bandwidth considering environment and overrides."""
+    if state.bandwidth_override is not None:
+        return state.bandwidth_override
     base_bw = CONFIG.get("radio", {}).get("bandwidth_kbps", 1000)
     profiles = CONFIG.get("environment", {}).get("profiles", {})
     profile = profiles.get(state.environment, {})
@@ -360,6 +365,24 @@ def get_manet_interface():
     except Exception:
         pass
     return "eth0"  # Fallback
+
+
+def setup_nat_routing():
+    """Set up NAT so app containers can reach manet network through this radio."""
+    manet_iface = MANET_INTERFACE
+
+    print(f"Setting up NAT on {manet_iface}")
+
+    # Enable IP forwarding
+    run_cmd("sysctl -w net.ipv4.ip_forward=1")
+
+    # NAT all forwarded traffic leaving via the manet interface.
+    # Traffic arrives from the veth pair (10.100.X.1) and gets masqueraded
+    # to this radio's manet IP (172.31.0.1X).
+    run_cmd(f"iptables -t nat -A POSTROUTING -o {manet_iface} -j MASQUERADE")
+
+    print(f"NAT routing configured on {manet_iface}")
+
 
 MANET_INTERFACE = None  # Will be set at startup
 
@@ -409,7 +432,15 @@ def apply_link_rules():
         override = state.link_overrides.get(target_id, {})
         target_ip = get_drone_ip(target_id)
 
-        if not quality.get("reachable", True) or override.get("partition", False):
+        if state.link_down:
+            # Drone is "out of range" - 100% loss on all links
+            latency = 0
+            loss = 100
+        elif state.direct_link_params:
+            # Absolute override from controller API - bypass distance calculation
+            latency = int(state.direct_link_params.get("delay_ms", 0))
+            loss = int(state.direct_link_params.get("loss_pct", 0))
+        elif not quality.get("reachable", True) or override.get("partition", False):
             # Unreachable or partitioned: use netem with 100% loss
             latency = 0
             loss = 100
@@ -423,8 +454,15 @@ def apply_link_rules():
         # Store mapping for traffic stats
         state.tc_class_map[class_id] = target_id
 
+        # Use direct rate override if set, otherwise share parent bandwidth
+        if state.direct_link_params and "rate_kbit" in state.direct_link_params:
+            link_rate = int(state.direct_link_params["rate_kbit"])
+            ceil_rate = min(link_rate, bandwidth)
+        else:
+            ceil_rate = bandwidth
+
         # Create HTB class (shares parent bandwidth)
-        run_cmd(f"tc class add dev {interface} parent 1:1 classid 1:{class_id} htb rate 10kbit ceil {bandwidth}kbit")
+        run_cmd(f"tc class add dev {interface} parent 1:1 classid 1:{class_id} htb rate 10kbit ceil {ceil_rate}kbit")
 
         # Add netem qdisc for latency/loss
         netem_params = []
@@ -601,6 +639,9 @@ class RadioHandler(BaseHTTPRequestHandler):
                 "probes": probe_results,
                 "link_quality": state.link_quality,
                 "link_overrides": state.link_overrides,
+                "direct_link_params": state.direct_link_params,
+                "link_down": state.link_down,
+                "bandwidth_override": state.bandwidth_override,
             })
         elif self.path == "/config":
             self.send_json(CONFIG)
@@ -657,6 +698,47 @@ class RadioHandler(BaseHTTPRequestHandler):
             except (ValueError, IndexError):
                 self.send_json({"error": "invalid drone id"}, 400)
 
+        elif self.path == "/link":
+            # Set absolute tc netem params (controller API)
+            data = self.read_json()
+            state.direct_link_params = {
+                "delay_ms": data.get("delay_ms", 0),
+                "loss_pct": data.get("loss_pct", 0),
+                "rate_kbit": data.get("rate_kbit", get_radio_bandwidth()),
+            }
+            state.link_down = False
+            apply_link_rules()
+            print(f"Direct link params set: {state.direct_link_params}")
+            self.send_json({"ok": True, "params": state.direct_link_params})
+
+        elif self.path == "/link_down":
+            # Simulate drone out of range (100% loss)
+            state.link_down = True
+            apply_link_rules()
+            print("Link DOWN - 100% loss")
+            self.send_json({"ok": True, "link_down": True})
+
+        elif self.path == "/link_up":
+            # Restore to normal operation
+            state.link_down = False
+            state.direct_link_params = {}
+            apply_link_rules()
+            print("Link UP - restored to distance-based calculation")
+            self.send_json({"ok": True, "link_down": False})
+
+        elif self.path == "/bandwidth":
+            # Override aggregate bandwidth
+            data = self.read_json()
+            rate = data.get("rate_kbit")
+            if rate is not None:
+                state.bandwidth_override = int(rate)
+            else:
+                state.bandwidth_override = None
+            setup_htb_root()
+            apply_link_rules()
+            print(f"Bandwidth override: {state.bandwidth_override}")
+            self.send_json({"ok": True, "bandwidth_kbps": get_radio_bandwidth()})
+
         elif self.path == "/link_override":
             # Set link quality override
             data = self.read_json()
@@ -701,6 +783,9 @@ def main():
     print(f"Topology: {state.topology}")
     print(f"Environment: {state.environment}")
     print(f"Bandwidth: {get_radio_bandwidth()} kbit/s")
+
+    # Set up NAT routing for app containers (veth traffic -> manet)
+    setup_nat_routing()
 
     # Set up traffic control on the MANET interface
     setup_htb_root()

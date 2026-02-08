@@ -1031,5 +1031,90 @@ def api_clear_link_override(source, target):
         return jsonify({"error": str(e)}), 500
 
 
+# =============================================================
+# Controller API - Design doc endpoints (proxy to radio sidecars)
+# =============================================================
+
+@app.route("/drones/<int:drone_id>/link", methods=["POST"])
+def controller_set_link(drone_id):
+    """Set absolute tc netem params for a drone's radio link."""
+    data = request.json
+    if drone_id == 0:
+        url = "http://base_station_radio:8080/link"
+    else:
+        url = f"http://drone{drone_id}_radio:8080/link"
+
+    try:
+        resp = requests.post(url, json=data, timeout=5)
+        return jsonify(resp.json()), resp.status_code
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/drones/<int:drone_id>/down", methods=["POST"])
+def controller_link_down(drone_id):
+    """Set 100% loss - simulate drone out of range."""
+    if drone_id == 0:
+        url = "http://base_station_radio:8080/link_down"
+    else:
+        url = f"http://drone{drone_id}_radio:8080/link_down"
+
+    try:
+        resp = requests.post(url, timeout=5)
+        return jsonify(resp.json()), resp.status_code
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/drones/<int:drone_id>/up", methods=["POST"])
+def controller_link_up(drone_id):
+    """Restore drone link to normal operation."""
+    if drone_id == 0:
+        url = "http://base_station_radio:8080/link_up"
+    else:
+        url = f"http://drone{drone_id}_radio:8080/link_up"
+
+    try:
+        resp = requests.post(url, timeout=5)
+        return jsonify(resp.json()), resp.status_code
+    except requests.RequestException as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/radio/bandwidth", methods=["POST"])
+def controller_set_bandwidth():
+    """Override aggregate bandwidth for all radios."""
+    data = request.json
+    results = []
+
+    for i in range(1, DRONE_COUNT + 1):
+        try:
+            resp = requests.post(
+                f"http://drone{i}_radio:8080/bandwidth",
+                json=data, timeout=5
+            )
+            results.append({"drone": i, "ok": resp.ok})
+        except requests.RequestException as e:
+            results.append({"drone": i, "error": str(e)})
+
+    return jsonify({"results": results})
+
+
+@app.route("/status")
+def controller_status():
+    """Aggregate status from all radios."""
+    statuses = {}
+
+    for i in range(1, DRONE_COUNT + 1):
+        try:
+            resp = requests.get(f"http://drone{i}_radio:8080/status", timeout=5)
+            if resp.ok:
+                statuses[i] = resp.json()
+        except requests.RequestException:
+            statuses[i] = {"error": "unreachable"}
+
+    return jsonify(statuses)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)

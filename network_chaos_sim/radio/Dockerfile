@@ -3,7 +3,9 @@ FROM python:3.11-alpine
 RUN apk add --no-cache \
     iproute2 \
     iputils \
-    iptables
+    iptables \
+    tcpdump \
+    traceroute
 
 RUN pip install --no-cache-dir pyyaml
 

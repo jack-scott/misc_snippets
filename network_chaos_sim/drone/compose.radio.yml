@@ -23,6 +23,7 @@ services:
         ipv4_address: 172.31.0.1${DRONE_ID}
       control:
       internal:
+        ipv4_address: 10.${DRONE_ID}.0.2
 
 networks:
   manet:
@@ -35,6 +36,11 @@ networks:
 
   internal:
     name: drone${DRONE_ID}_internal
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.${DRONE_ID}.0.0/16
+          gateway: 10.${DRONE_ID}.0.1
 
 volumes:
   manet_metrics:
