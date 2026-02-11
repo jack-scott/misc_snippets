@@ -151,12 +151,10 @@ curl -X DELETE http://localhost:8080/api/link/1/2
 pixi run pytest tests/test_radio.py -v
 
 # Integration tests (requires running simulator: ./launch.py 3)
-./tests/integration/test_connectivity.sh
-./tests/integration/test_internal_unaffected.sh
-./tests/integration/test_per_spoke_shaping.sh
-./tests/integration/test_dynamic_link_control.sh
-./tests/integration/test_route_injection.sh
-./tests/integration/test_cleanup.sh          # tears down the simulator
+pixi run pytest tests/integration/ -v --ignore=tests/integration/test_cleanup.py
+
+# Cleanup test (tears down the simulator)
+pixi run pytest tests/integration/test_cleanup.py -v
 ```
 
 ## Scaling
