@@ -67,11 +67,11 @@ def get_unreachable_target(topology, drone_id):
 # Docker / network helpers
 # ---------------------------------------------------------------------------
 
-def docker_exec(container, cmd, check=True):
+def docker_exec(container, cmd, check=True, timeout=30):
     """Run a command inside a Docker container, return stdout."""
     result = subprocess.run(
         ["docker", "exec", container] + cmd,
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=timeout,
     )
     if check and result.returncode != 0:
         raise RuntimeError(
@@ -87,10 +87,12 @@ def ping(container, target, count=5, timeout=2):
     loss_pct: integer 0-100
     avg_rtt_ms: float, or None if 100% loss
     """
+    exec_timeout = int(count * 0.5 + timeout + 10)
     result = docker_exec(
         container,
-        ["ping", "-c", str(count), "-W", str(timeout), "-q", target],
+        ["ping", "-c", str(count), "-W", str(timeout), "-i", "0.5", "-q", target],
         check=False,
+        timeout=exec_timeout,
     )
     output = result.stdout
 
