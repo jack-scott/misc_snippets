@@ -10,11 +10,40 @@ Usage:
     ./launch.py down        # Stop everything
 """
 
+import re
 import subprocess
 import sys
 import os
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_config():
+    """Read config.yaml and return the parsed dict.
+
+    Uses PyYAML if available, otherwise falls back to a simple regex
+    to extract topology.default.
+    """
+    config_path = os.path.join(SCRIPT_DIR, "config.yaml")
+    if not os.path.exists(config_path):
+        return {}
+
+    with open(config_path) as f:
+        content = f.read()
+
+    if yaml is not None:
+        return yaml.safe_load(content) or {}
+
+    # Regex fallback: find "default: <value>" under "topology:" section
+    match = re.search(r"^topology:\s*\n\s+default:\s*(\S+)", content, re.MULTILINE)
+    if match:
+        return {"topology": {"default": match.group(1)}}
+    return {}
 
 
 def run(cmd, check=True):
@@ -67,6 +96,12 @@ def setup_veth_pairs(drone_count):
     # the correct namespaces. Runs in one privileged container to avoid
     # pulling/installing iproute2 per drone.
     ip_cmds = []
+
+    # Clean up any residual veth pairs in the host namespace first
+    for i, _, _ in drones:
+        veth_app = f"veth-d{i}-app"
+        ip_cmds.append(f"ip link del {veth_app} 2>/dev/null || true")
+
     for i, app_pid, radio_pid in drones:
         veth_app = f"veth-d{i}-app"
         veth_radio = f"veth-d{i}-radio"
@@ -182,6 +217,16 @@ def stop():
     print("Stopping control plane...")
     run("docker compose down", check=False)
 
+    # Clean up any residual veth pairs left in the host namespace
+    print("Cleaning up veth pairs...")
+    run(
+        "docker run --rm --privileged --net=host alpine "
+        "sh -c 'apk add --no-cache -q iproute2 && "
+        "for iface in $(ip -o link show | grep -oE \"veth-d[0-9]+-app\"); do "
+        "ip link del \"$iface\" 2>/dev/null || true; done'",
+        check=False,
+    )
+
     # Remove shared resources
     print("Removing shared network...")
     run("docker network rm manet_mesh 2>/dev/null || true", check=False)
@@ -206,7 +251,13 @@ def main():
         if drone_count > 10:
             print("Warning: More than 10 drones may be slow")
 
-        with_base_station = "--star" in sys.argv
+        if "--star" in sys.argv:
+            with_base_station = True
+        elif "--mesh" in sys.argv:
+            with_base_station = False
+        else:
+            config = read_config()
+            with_base_station = config.get("topology", {}).get("default", "mesh") == "star"
         launch(drone_count, with_base_station)
     else:
         print(f"Unknown argument: {arg}")

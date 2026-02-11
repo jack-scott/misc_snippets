@@ -7,6 +7,7 @@ services:
     build:
       context: ./ui
     container_name: manet_ui
+    stop_grace_period: 2s
     ports:
       - "8080:8080"
     environment:

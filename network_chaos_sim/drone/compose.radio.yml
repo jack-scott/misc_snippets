@@ -10,6 +10,7 @@ services:
       context: ../radio
     container_name: drone${DRONE_ID}_radio
     hostname: drone${DRONE_ID}_radio
+    stop_grace_period: 2s
     cap_add:
       - NET_ADMIN
     environment:

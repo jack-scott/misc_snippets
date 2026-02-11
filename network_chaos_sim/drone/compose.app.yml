@@ -23,6 +23,7 @@ services:
     image: alpine:latest
     container_name: drone${DRONE_ID}_app
     hostname: drone${DRONE_ID}
+    stop_grace_period: 2s
     cap_add:
       - NET_ADMIN  # Required for route injection
     environment:
@@ -32,7 +33,7 @@ services:
       - sh
       - -c
       - |
-        apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools
+        apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools iperf
         echo "Drone ${DRONE_ID} starting..."
         echo "Route to MANET (172.31.0.0/24) is configured via veth pair by launch.py"
         # Your application logic here

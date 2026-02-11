@@ -249,17 +249,17 @@ def get_drone_ip(drone_id):
     return f"172.31.0.1{drone_id}"
 
 def get_other_drones():
-    """Get list of reachable drone IDs based on topology."""
-    if state.topology == "star":
-        if DRONE_ID == 0:
-            # Base station can reach all drones
-            return list(range(1, DRONE_COUNT + 1))
-        else:
-            # Drones can only reach base station
-            return [0]
-    else:
-        # Mesh: can reach all other drones
-        return [i for i in range(1, DRONE_COUNT + 1) if i != DRONE_ID]
+    """Get list of reachable drone IDs based on topology.
+
+    In star mode the base station (ID 0) is transparent infrastructure —
+    drones reach each other *through* it, so each drone's peer list is
+    the same as mesh (all other drones).  The base station itself is not
+    a directly addressable peer.
+    """
+    if DRONE_ID == 0:
+        # Base station can reach all drones
+        return list(range(1, DRONE_COUNT + 1))
+    return [i for i in range(1, DRONE_COUNT + 1) if i != DRONE_ID]
 
 def calculate_distance(pos1, pos2):
     """Calculate 3D Euclidean distance between two positions."""
@@ -313,12 +313,12 @@ def apply_environment(base_quality):
 
     return {"latency_ms": latency, "loss_percent": loss}
 
-def calculate_link_quality(target_id):
-    """Calculate link quality to a target drone based on distance and environment."""
-    if DRONE_ID not in state.positions or target_id not in state.positions:
-        return {"latency_ms": 10, "loss_percent": 0, "reachable": True}
+def _direct_link_quality(src_id, dst_id):
+    """Calculate single-hop link quality between two nodes."""
+    if src_id not in state.positions or dst_id not in state.positions:
+        return {"latency_ms": 10, "loss_percent": 0, "reachable": True, "distance_m": 0}
 
-    distance = calculate_distance(state.positions[DRONE_ID], state.positions[target_id])
+    distance = calculate_distance(state.positions[src_id], state.positions[dst_id])
     base_quality = interpolate_degradation(distance)
 
     if base_quality is None:
@@ -327,8 +327,36 @@ def calculate_link_quality(target_id):
     quality = apply_environment(base_quality)
     quality["reachable"] = True
     quality["distance_m"] = distance
-
     return quality
+
+def calculate_link_quality(target_id):
+    """Calculate link quality to a target drone based on distance, environment,
+    and topology.
+
+    In star mode, drone-to-drone traffic is routed through the base station
+    (ID 0), so quality reflects the two-hop path: self -> base -> target.
+    Latencies add; losses compound.
+    """
+    if state.topology == "star" and DRONE_ID != 0 and target_id != 0:
+        leg1 = _direct_link_quality(DRONE_ID, 0)
+        leg2 = _direct_link_quality(0, target_id)
+
+        if not leg1["reachable"] or not leg2["reachable"]:
+            total_dist = leg1.get("distance_m", 0) + leg2.get("distance_m", 0)
+            return {"latency_ms": 0, "loss_percent": 100, "reachable": False, "distance_m": total_dist}
+
+        combined_latency = leg1["latency_ms"] + leg2["latency_ms"]
+        combined_loss = 100 * (1 - (1 - leg1["loss_percent"] / 100) * (1 - leg2["loss_percent"] / 100))
+        combined_distance = leg1["distance_m"] + leg2["distance_m"]
+
+        return {
+            "latency_ms": combined_latency,
+            "loss_percent": combined_loss,
+            "reachable": True,
+            "distance_m": combined_distance,
+        }
+
+    return _direct_link_quality(DRONE_ID, target_id)
 
 def get_radio_bandwidth():
     """Get effective radio bandwidth considering environment and overrides."""
@@ -371,17 +399,36 @@ def setup_nat_routing():
     """Set up NAT so app containers can reach manet network through this radio."""
     manet_iface = MANET_INTERFACE
 
-    print(f"Setting up NAT on {manet_iface}")
-
-    # Enable IP forwarding
+    # Enable IP forwarding (needed for veth routing and star-mode forwarding)
     run_cmd("sysctl -w net.ipv4.ip_forward=1")
 
-    # NAT all forwarded traffic leaving via the manet interface.
-    # Traffic arrives from the veth pair (10.100.X.1) and gets masqueraded
-    # to this radio's manet IP (172.31.0.1X).
-    run_cmd(f"iptables -t nat -A POSTROUTING -o {manet_iface} -j MASQUERADE")
+    if DRONE_ID == 0:
+        # Base station: forward drone-to-drone traffic without NAT so
+        # source IPs are preserved.  Ensure the FORWARD chain accepts.
+        run_cmd("iptables -P FORWARD ACCEPT")
+        print(f"Base station forwarding enabled on {manet_iface}")
+    else:
+        # Drone: NAT only traffic from the app container's veth pair.
+        # Do NOT MASQUERADE forwarded traffic (preserves source IP for
+        # star-mode packets transiting the base station).
+        run_cmd(f"iptables -t nat -A POSTROUTING -o {manet_iface} "
+                f"-s 10.100.{DRONE_ID}.0/30 -j MASQUERADE")
+        print(f"NAT routing configured on {manet_iface}")
 
-    print(f"NAT routing configured on {manet_iface}")
+
+def setup_star_routes():
+    """In star topology, add /32 routes so drone-to-drone traffic goes via the base station."""
+    if state.topology != "star" or DRONE_ID == 0:
+        return
+
+    base_ip = get_drone_ip(0)
+    for target_id in range(1, DRONE_COUNT + 1):
+        if target_id == DRONE_ID:
+            continue
+        target_ip = get_drone_ip(target_id)
+        run_cmd(f"ip route add {target_ip}/32 via {base_ip}")
+
+    print(f"Star routes configured: drone traffic routes via {base_ip}")
 
 
 MANET_INTERFACE = None  # Will be set at startup
@@ -407,7 +454,6 @@ def apply_link_rules():
     """Apply tc rules for each link based on calculated quality."""
     interface = MANET_INTERFACE
     bandwidth = get_radio_bandwidth()
-    targets = get_other_drones()
 
     # Recalculate all link qualities
     for target_id in range(0, DRONE_COUNT + 1):
@@ -425,14 +471,43 @@ def apply_link_rules():
     # Clear the class mapping
     state.tc_class_map = {}
 
-    # Create class and netem qdisc for each reachable target
+    # Create class and netem qdisc for each peer.
+    # Peers NOT in the reachable set (per topology) get 100% loss.
+    reachable_targets = get_other_drones()
+    all_peers = [i for i in range(0, DRONE_COUNT + 1) if i != DRONE_ID]
+
+    # In star mode, this drone only shapes leg1 (self → base station).
+    # The base station independently shapes leg2 (base → target).
+    # Pre-compute leg1 quality once for reuse, incorporating any
+    # override the user set on the drone→BS link (target 0).
+    star_leg1 = None
+    if state.topology == "star" and DRONE_ID != 0:
+        star_leg1 = _direct_link_quality(DRONE_ID, 0)
+        leg1_override = state.link_overrides.get(0, {})
+        if leg1_override.get("partition", False):
+            star_leg1 = {"latency_ms": 0, "loss_percent": 100, "reachable": False, "distance_m": star_leg1.get("distance_m", 0)}
+        elif leg1_override:
+            star_leg1 = dict(star_leg1)  # copy before mutating
+            star_leg1["latency_ms"] = star_leg1.get("latency_ms", 0) + int(leg1_override.get("extra_latency_ms", 0))
+            star_leg1["loss_percent"] = min(100, star_leg1.get("loss_percent", 0) + int(leg1_override.get("extra_loss_percent", 0)))
+
     class_id = 10
-    for target_id in targets:
+    for target_id in all_peers:
         quality = state.link_quality.get(target_id, {})
         override = state.link_overrides.get(target_id, {})
         target_ip = get_drone_ip(target_id)
 
-        if state.link_down:
+        # For tc shaping, use leg1 quality in star mode (base station shapes leg2)
+        if star_leg1 is not None and target_id != 0:
+            tc_quality = star_leg1
+        else:
+            tc_quality = quality
+
+        if target_id not in reachable_targets:
+            # Topology forbids this link — enforce 100% loss
+            latency = 0
+            loss = 100
+        elif state.link_down:
             # Drone is "out of range" - 100% loss on all links
             latency = 0
             loss = 100
@@ -440,14 +515,14 @@ def apply_link_rules():
             # Absolute override from controller API - bypass distance calculation
             latency = int(state.direct_link_params.get("delay_ms", 0))
             loss = int(state.direct_link_params.get("loss_pct", 0))
-        elif not quality.get("reachable", True) or override.get("partition", False):
+        elif not tc_quality.get("reachable", True) or override.get("partition", False):
             # Unreachable or partitioned: use netem with 100% loss
             latency = 0
             loss = 100
         else:
             # Base quality + any overrides
-            latency = int(quality.get("latency_ms", 10)) + int(override.get("extra_latency_ms", 0))
-            loss = min(100, int(quality.get("loss_percent", 0)) + int(override.get("extra_loss_percent", 0)))
+            latency = int(tc_quality.get("latency_ms", 10)) + int(override.get("extra_latency_ms", 0))
+            loss = min(100, int(tc_quality.get("loss_percent", 0)) + int(override.get("extra_loss_percent", 0)))
 
         class_id += 1
 
@@ -479,7 +554,7 @@ def apply_link_rules():
         # Filter to direct traffic to this class
         run_cmd(f"tc filter add dev {interface} parent 1: protocol ip prio {class_id - 10} u32 match ip dst {target_ip}/32 flowid 1:{class_id}")
 
-    print(f"Applied link rules for {len(targets)} targets")
+    print(f"Applied link rules for {len(all_peers)} peers ({len(reachable_targets)} reachable)")
 
 # Probe functions
 probe_results = {}
@@ -786,6 +861,9 @@ def main():
 
     # Set up NAT routing for app containers (veth traffic -> manet)
     setup_nat_routing()
+
+    # In star topology, route drone-to-drone traffic through the base station
+    setup_star_routes()
 
     # Set up traffic control on the MANET interface
     setup_htb_root()

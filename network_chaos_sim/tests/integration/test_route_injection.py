@@ -1,27 +1,27 @@
-"""Route injection - all app containers can reach all other drones.
+"""Route injection - all app containers can reach reachable peers.
 
 Verifies that veth pair setup by launch.py correctly routes traffic from
-every app container to every other drone's radio.
+every app container to every reachable drone (topology-dependent).
 """
 
 import pytest
 
-from conftest import DRONE_COUNT, ping
+from conftest import get_reachable_pairs, ping
+
+pytestmark = pytest.mark.usefixtures("reset_links")
 
 
-def _all_pairs():
-    """Generate all (src, dst) drone pairs."""
-    for src in range(1, DRONE_COUNT + 1):
-        for dst in range(1, DRONE_COUNT + 1):
-            if src != dst:
-                yield src, dst
-
-
-@pytest.mark.parametrize("src,dst", list(_all_pairs()))
-def test_app_reaches_drone(src, dst):
-    """drone{src}_app can ping drone{dst}_radio."""
+def test_app_reaches_all_reachable_peers(simulator):
+    """Every app container can ping every reachable peer with 0% loss."""
     expected_loss = 0
-    loss, _ = ping(f"drone{src}_app", f"172.31.0.1{dst}", count=3)
-    assert loss == expected_loss, (
-        f"drone{src}_app -> 172.31.0.1{dst}: {loss}% loss"
+    pairs = get_reachable_pairs(simulator)
+    failures = []
+
+    for src, dst_ip in pairs:
+        loss, _ = ping(f"drone{src}_app", dst_ip, count=3)
+        if loss != expected_loss:
+            failures.append(f"drone{src}_app -> {dst_ip}: {loss}% loss")
+
+    assert not failures, (
+        f"{len(failures)} route(s) failed:\n" + "\n".join(failures)
     )

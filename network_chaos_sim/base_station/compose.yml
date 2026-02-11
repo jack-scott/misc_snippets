@@ -9,6 +9,7 @@ services:
       context: ../radio
     container_name: base_station_radio
     hostname: base_station
+    stop_grace_period: 2s
     cap_add:
       - NET_ADMIN
     environment:

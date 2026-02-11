@@ -96,7 +96,7 @@ environment:
 # Network topology configuration
 topology:
   # Default mode: "mesh" or "star"
-  default: mesh
+  default: star
 
   # Star topology settings
   star:

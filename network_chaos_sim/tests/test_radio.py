@@ -159,10 +159,13 @@ class TestGetOtherDrones:
         assert 2 in result
         assert 3 in result
 
-    def test_star_drone_only_base(self):
+    def test_star_drone_sees_other_drones(self):
         radio.state.topology = "star"
         result = radio.get_other_drones()
-        assert result == [0]
+        # Star mode: base station is invisible, drones see other drones
+        assert 0 not in result
+        assert 2 in result
+        assert 3 in result
 
     def test_star_base(self):
         # Temporarily change DRONE_ID to 0 (base station)
@@ -177,6 +180,7 @@ class TestGetOtherDrones:
 
 class TestCalculateLinkQuality:
     def test_close_range(self):
+        radio.state.topology = "mesh"
         radio.state.positions[1] = {"x": 0, "y": 0, "z": 0}
         radio.state.positions[2] = {"x": 10, "y": 0, "z": 0}
         result = radio.calculate_link_quality(2)
@@ -187,6 +191,7 @@ class TestCalculateLinkQuality:
         assert result["loss_percent"] >= 0
 
     def test_out_of_range(self):
+        radio.state.topology = "mesh"
         radio.state.positions[1] = {"x": 0, "y": 0, "z": 0}
         radio.state.positions[2] = {"x": 2000, "y": 0, "z": 0}
         result = radio.calculate_link_quality(2)
@@ -195,6 +200,7 @@ class TestCalculateLinkQuality:
         assert result["loss_percent"] == 100
 
     def test_with_environment(self):
+        radio.state.topology = "mesh"
         profiles = radio.CONFIG.get("environment", {}).get("profiles", {})
         if "storm" not in profiles:
             profiles["storm"] = {
@@ -214,6 +220,28 @@ class TestCalculateLinkQuality:
 
         # Storm should have higher latency
         assert storm_result["latency_ms"] > clear_result["latency_ms"]
+
+    def test_star_two_hop_latency(self):
+        """Star topology: drone-to-drone quality reflects two hops through base."""
+        radio.state.positions[0] = {"x": 0, "y": 0, "z": 0}
+        radio.state.positions[1] = {"x": 100, "y": 0, "z": 0}
+        radio.state.positions[2] = {"x": -100, "y": 0, "z": 0}
+        radio.state.environment = "clear"
+
+        radio.state.topology = "mesh"
+        mesh_result = radio.calculate_link_quality(2)
+
+        radio.state.topology = "star"
+        star_result = radio.calculate_link_quality(2)
+
+        # Mesh: direct 200m path
+        # Star: 100m + 100m through base (each hop shorter, but latencies add)
+        assert star_result["reachable"] is True
+        assert star_result["distance_m"] == 200.0
+        # Two-hop latency should be approximately double the 100m single-hop latency
+        leg_quality = radio._direct_link_quality(1, 0)
+        expected_latency = leg_quality["latency_ms"] * 2
+        assert abs(star_result["latency_ms"] - expected_latency) < 0.01
 
 
 class TestDirectLinkParams:

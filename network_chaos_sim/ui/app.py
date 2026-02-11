@@ -269,9 +269,13 @@ HTML_TEMPLATE = """
                     <div class="control-row">
                         <div class="control-group">
                             <label>Topology</label>
-                            <select id="topology-select" onchange="setTopology(this.value)">
-                                <option value="mesh">Mesh (all-to-all)</option>
-                                <option value="star">Star (via base station)</option>
+                            <div id="topology-label" style="padding:8px;background:#0f3460;border:1px solid #2a4a6a;border-radius:6px;font-size:13px;text-transform:capitalize">mesh</div>
+                        </div>
+                        <div class="control-group" id="star-view-group" style="display:none">
+                            <label>View</label>
+                            <select id="star-view-select" onchange="setStarView(this.value)">
+                                <option value="legs">Legs</option>
+                                <option value="paths">Paths</option>
                             </select>
                         </div>
                     </div>
@@ -391,6 +395,7 @@ HTML_TEMPLATE = """
         let selectedLink = null;  // {source, target}
         let currentTopology = 'mesh';
         let currentEnvironment = 'clear';
+        let starView = 'legs';
 
         // Zoom and pan state
         let zoom = 1;
@@ -413,8 +418,8 @@ HTML_TEMPLATE = """
 
         // Calculate base position for a drone (before zoom/pan)
         function getBasePosition(pos, droneId) {
-            if (!pos || (pos.x === 0 && pos.y === 0)) {
-                // Default circular layout if no position set
+            if (!pos || pos.x === undefined) {
+                // No position data — default circular layout
                 const angle = (2 * Math.PI * (droneId - 1) / DRONE_COUNT) - Math.PI / 2;
                 return {
                     x: BASE_CENTER_X + BASE_RADIUS * Math.cos(angle),
@@ -464,10 +469,14 @@ HTML_TEMPLATE = """
             currentTopology = firstDrone.topology || 'mesh';
             currentEnvironment = firstDrone.environment || 'clear';
 
-            document.getElementById('topology-select').value = currentTopology;
+            document.getElementById('topology-label').textContent = currentTopology;
             document.getElementById('environment-select').value = currentEnvironment;
             document.getElementById('status-bw').textContent = (firstDrone.bandwidth_kbps || 1000) + ' kbps';
             document.getElementById('status-drones').textContent = DRONE_COUNT + ' drones';
+
+            // Show/hide star view dropdown
+            document.getElementById('star-view-group').style.display =
+                currentTopology === 'star' ? '' : 'none';
 
             // Build links array from metrics
             links = [];
@@ -496,13 +505,49 @@ HTML_TEMPLATE = """
                 }
             }
 
+            // Star "Legs" view: replace with drone→BS links from link_quality
+            if (currentTopology === 'star' && starView === 'legs') {
+                const starLinks = [];
+                for (let i = 1; i <= DRONE_COUNT; i++) {
+                    const data = metrics[i] || {};
+                    const quality = (data.link_quality || {})["0"] || {};
+                    starLinks.push({
+                        source: i,
+                        target: 0,
+                        ping_ms: -1,
+                        tcp_ok: false,
+                        udp_ok: false,
+                        distance_m: quality.distance_m || 0,
+                        reachable: quality.reachable !== false,
+                        position: data.position || {},
+                        tx_bytes_sec: 0,
+                        tx_packets_sec: 0,
+                        dropped_sec: 0,
+                        expected_latency_ms: quality.latency_ms || 0,
+                        expected_loss_percent: quality.loss_percent || 0,
+                        has_override: false,
+                        partition: false,
+                    });
+                }
+                links = starLinks;
+            }
+
             renderTopology();
             renderLinksList();
             renderNodeStats();
         }
 
         function getLinkStatus(link) {
-            if (!link.reachable || link.ping_ms < 0) return 'down';
+            if (!link.reachable) return 'down';
+            if (link.ping_ms < 0) {
+                // No ping data (e.g. star leg to BS) — use expected quality
+                if (link.target === 0 && link.reachable) {
+                    if (link.expected_loss_percent >= 40) return 'bad';
+                    if (link.expected_loss_percent >= 10 || link.expected_latency_ms > 30) return 'degraded';
+                    return 'good';
+                }
+                return 'down';
+            }
             if (link.ping_ms > 100) return 'bad';
             if (link.ping_ms > 30) return 'degraded';
             return 'good';
@@ -519,9 +564,18 @@ HTML_TEMPLATE = """
                 basePositions[i] = getBasePosition(droneMetrics.position, i);
             }
 
-            // Base station at center (if star topology)
+            // Base station position (star topology)
             if (currentTopology === 'star') {
-                basePositions[0] = { x: BASE_CENTER_X, y: BASE_CENTER_Y };
+                const bsMetrics = metrics[0] || {};
+                const bsPos = bsMetrics.position;
+                if (bsPos && (bsPos.x !== 0 || bsPos.y !== 0)) {
+                    basePositions[0] = {
+                        x: BASE_CENTER_X + bsPos.x * BASE_SCALE,
+                        y: BASE_CENTER_Y - bsPos.y * BASE_SCALE
+                    };
+                } else {
+                    basePositions[0] = { x: BASE_CENTER_X - 180, y: BASE_CENTER_Y };
+                }
             }
 
             // Apply zoom transform to get display positions
@@ -688,7 +742,8 @@ HTML_TEMPLATE = """
 
             for (const link of links) {
                 const status = getLinkStatus(link);
-                const pingStr = link.ping_ms >= 0 ? link.ping_ms.toFixed(1) + 'ms' : 'DOWN';
+                const pingStr = link.ping_ms >= 0 ? link.ping_ms.toFixed(1) + 'ms'
+                    : (link.target === 0 && link.reachable ? '~' + Math.round(link.expected_latency_ms) + 'ms' : 'DOWN');
                 const distStr = link.distance_m > 0 ? Math.round(link.distance_m) + 'm' : '-';
                 const trafficStr = link.tx_bytes_sec > 0 ? formatBytes(link.tx_bytes_sec) : '-';
                 const pktStr = link.tx_packets_sec > 0 ? link.tx_packets_sec + ' pkt/s' : '-';
@@ -717,7 +772,10 @@ HTML_TEMPLATE = """
             const container = document.getElementById('node-stats');
             let html = '';
 
-            for (let i = 1; i <= DRONE_COUNT; i++) {
+            // Include base station (id 0) when in star topology
+            const nodeIds = currentTopology === 'star' ? [0, ...Array.from({length: DRONE_COUNT}, (_, i) => i + 1)] : Array.from({length: DRONE_COUNT}, (_, i) => i + 1);
+
+            for (const i of nodeIds) {
                 const data = metrics[i] || {};
                 const traffic = data.traffic || {};
                 const load = traffic.load_percent || 0;
@@ -725,6 +783,7 @@ HTML_TEMPLATE = """
                 const rxRate = traffic.rx_bytes_sec || 0;
                 const txPkt = traffic.tx_packets_sec || 0;
                 const rxPkt = traffic.rx_packets_sec || 0;
+                const name = i === 0 ? 'Base Station' : `Drone ${i}`;
 
                 let loadClass = 'low';
                 if (load > 70) loadClass = 'high';
@@ -732,7 +791,7 @@ HTML_TEMPLATE = """
 
                 html += `<div class="node-stat-item">
                     <div class="node-stat-header">
-                        <span class="node-stat-name">Drone ${i}</span>
+                        <span class="node-stat-name">${name}</span>
                         <span class="node-stat-load ${loadClass}">${load.toFixed(1)}% load</span>
                     </div>
                     <div class="node-stat-details">
@@ -852,17 +911,9 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function setTopology(mode) {
-            try {
-                await fetch('/api/topology', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode })
-                });
-                setTimeout(fetchMetrics, 500);
-            } catch (e) {
-                console.error('Failed to set topology:', e);
-            }
+        function setStarView(view) {
+            starView = view;
+            updateUI();
         }
 
         async function setEnvironment(profile) {
