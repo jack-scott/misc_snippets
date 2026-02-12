@@ -395,45 +395,12 @@ def get_manet_interface():
     return "eth0"  # Fallback
 
 
-def setup_nat_routing():
-    """Set up NAT so app containers can reach the manet network through this radio.
-
-    Outbound (app -> manet): MASQUERADE rewrites source to the radio's manet IP.
-    Inbound  (manet -> app): DNAT forwards incoming traffic to the app via veth.
-    Radio service ports (8080, 9000, 9001) are excluded from DNAT so probes and
-    the control API still reach the radio directly.
-    """
-    manet_iface = MANET_INTERFACE
-
-    # Enable IP forwarding (needed for veth routing and star-mode forwarding)
+def setup_forwarding():
+    """Enable IP forwarding for star-mode traffic relay through the base station."""
+    # Enable IP forwarding (needed for star-mode: base station forwards between drones)
     run_cmd("sysctl -w net.ipv4.ip_forward=1")
-
-    # Allow forwarding between interfaces (veth <-> manet)
     run_cmd("iptables -P FORWARD ACCEPT")
-
-    if DRONE_ID == 0:
-        # Base station: forward drone-to-drone traffic without NAT so
-        # source IPs are preserved.
-        print(f"Base station forwarding enabled on {manet_iface}")
-    else:
-        # Outbound: NAT traffic from the app container's veth pair.
-        # Do NOT MASQUERADE forwarded traffic (preserves source IP for
-        # star-mode packets transiting the base station).
-        run_cmd(f"iptables -t nat -A POSTROUTING -o {manet_iface} "
-                f"-s 10.100.{DRONE_ID}.0/30 -j MASQUERADE")
-
-        # Inbound: forward manet traffic to the app container via veth.
-        # Exclude radio's own service ports so probes and API still work.
-        run_cmd(f"iptables -t nat -A PREROUTING -i {manet_iface} "
-                f"-d 172.31.0.1{DRONE_ID} -p tcp --dport 8080 -j ACCEPT")
-        run_cmd(f"iptables -t nat -A PREROUTING -i {manet_iface} "
-                f"-d 172.31.0.1{DRONE_ID} -p tcp --dport 9000 -j ACCEPT")
-        run_cmd(f"iptables -t nat -A PREROUTING -i {manet_iface} "
-                f"-d 172.31.0.1{DRONE_ID} -p udp --dport 9001 -j ACCEPT")
-        run_cmd(f"iptables -t nat -A PREROUTING -i {manet_iface} "
-                f"-d 172.31.0.1{DRONE_ID} -j DNAT --to-destination 10.100.{DRONE_ID}.1")
-
-        print(f"NAT routing configured on {manet_iface} (MASQUERADE out + DNAT in to 10.100.{DRONE_ID}.1)")
+    print(f"IP forwarding enabled")
 
 
 def setup_star_routes():
@@ -885,7 +852,8 @@ def main():
     print(f"Bandwidth: {get_radio_bandwidth()} kbit/s")
 
     # Set up NAT routing for app containers (veth traffic -> manet)
-    setup_nat_routing()
+    # Enable IP forwarding (needed for star-mode base station relay)
+    setup_forwarding()
 
     # In star topology, route drone-to-drone traffic through the base station
     setup_star_routes()

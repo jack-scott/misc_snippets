@@ -3,6 +3,10 @@
 # This provides the MANET radio interface for your drone.
 # Your drone software goes in compose.app.yml
 # Configure radio settings in ../config.yaml
+#
+# App containers use network_mode: "service:radio" to share this
+# container's network namespace. They see the same interfaces and
+# can bind directly to the MANET IP (172.31.0.1X).
 
 services:
   radio:
@@ -23,8 +27,6 @@ services:
       manet:
         ipv4_address: 172.31.0.1${DRONE_ID}
       control:
-      internal:
-        ipv4_address: 10.${DRONE_ID}.0.2
 
 networks:
   manet:
@@ -34,14 +36,6 @@ networks:
   control:
     name: manet_control
     external: true
-
-  internal:
-    name: drone${DRONE_ID}_internal
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.${DRONE_ID}.0.0/16
-          gateway: 10.${DRONE_ID}.0.1
 
 volumes:
   manet_metrics:

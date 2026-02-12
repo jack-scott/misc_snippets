@@ -2,13 +2,16 @@
 #
 # Add your drone services here. They will be launched alongside the radio.
 #
-# Available networks:
-#   - internal: Local drone network (no chaos, for inter-service comms)
+# All services share the radio's network namespace (network_mode: "service:radio").
+# This means:
+#   - Your services share the radio's MANET IP (172.31.0.1X)
+#   - Bind to 0.0.0.0:<port> to accept connections from other drones
+#   - Inter-service comms within this drone go over localhost (unaffected by shaping)
+#   - Traffic to other drones goes through the MANET interface (shaped by tc)
+#   - Avoid ports 8080, 9000, 9001 (used by the radio)
 #
 # To reach other drones:
-#   - Traffic is routed through the radio sidecar (10.${DRONE_ID}.0.2)
 #   - Ping/UDP/TCP to 172.31.0.1X where X is the drone ID
-#   - Or use hostname: drone{X}_radio
 #
 # Environment variables available:
 #   - DRONE_ID: This drone's ID (1, 2, 3, ...)
@@ -19,13 +22,11 @@ services:
   # YOUR DRONE SOFTWARE HERE
   # ===========================================
 
-  app:
+  app1:
     image: alpine:latest
-    container_name: drone${DRONE_ID}_app
-    hostname: drone${DRONE_ID}
+    container_name: drone${DRONE_ID}_app1
     stop_grace_period: 2s
-    cap_add:
-      - NET_ADMIN  # Required for route injection
+    network_mode: "service:radio"
     environment:
       - DRONE_ID=${DRONE_ID}
       - DRONE_COUNT=${DRONE_COUNT}
@@ -34,12 +35,30 @@ services:
       - -c
       - |
         apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools iperf
-        echo "Drone ${DRONE_ID} starting..."
-        echo "Route to MANET (172.31.0.0/24) is configured via veth pair by launch.py"
+        echo "Drone ${DRONE_ID} app1 starting..."
+        echo "MANET IP: 172.31.0.1${DRONE_ID}"
         # Your application logic here
         tail -f /dev/null
-    networks:
-      internal:
+    depends_on:
+      - radio
+
+  app2:
+    image: alpine:latest
+    container_name: drone${DRONE_ID}_app2
+    stop_grace_period: 2s
+    network_mode: "service:radio"
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools iperf
+        echo "Drone ${DRONE_ID} app2 starting..."
+        echo "MANET IP: 172.31.0.1${DRONE_ID}"
+        # Your application logic here
+        tail -f /dev/null
     depends_on:
       - radio
 
@@ -48,13 +67,8 @@ services:
   # ros_node:
   #   image: ros:humble
   #   container_name: drone${DRONE_ID}_ros
+  #   network_mode: "service:radio"
   #   environment:
   #     - ROS_DOMAIN_ID=${DRONE_ID}
-  #   networks:
-  #     - internal
   #   depends_on:
   #     - radio
-
-networks:
-  internal:
-    name: drone${DRONE_ID}_internal

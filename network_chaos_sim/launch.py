@@ -56,94 +56,6 @@ def run(cmd, check=True):
     return result.returncode == 0
 
 
-def get_container_pid(container_name):
-    """Get the PID of a running container's init process."""
-    result = subprocess.run(
-        f"docker inspect --format '{{{{.State.Pid}}}}' {container_name}",
-        shell=True, capture_output=True, text=True, cwd=SCRIPT_DIR
-    )
-    if result.returncode != 0:
-        return None
-    pid = result.stdout.strip()
-    if pid and pid != "0":
-        return int(pid)
-    return None
-
-
-def setup_veth_pairs(drone_count):
-    """Create veth pairs connecting app containers directly to radio containers.
-
-    This bypasses Docker bridge networking (and br_netfilter) for routed
-    inter-drone traffic. See design_doc.md section 2.2 for why this is needed.
-
-    Addressing: 10.100.{drone_id}.1/30 (app) <-> 10.100.{drone_id}.2/30 (radio)
-    """
-    # Collect PIDs for all drones first
-    drones = []
-    for i in range(1, drone_count + 1):
-        app_pid = get_container_pid(f"drone{i}_app")
-        radio_pid = get_container_pid(f"drone{i}_radio")
-        if not app_pid or not radio_pid:
-            print(f"  Warning: Could not find PIDs for drone {i} (app={app_pid}, radio={radio_pid})")
-            continue
-        drones.append((i, app_pid, radio_pid))
-
-    if not drones:
-        print("  No drones to configure")
-        return
-
-    # Build a single script that creates all veth pairs and moves them into
-    # the correct namespaces. Runs in one privileged container to avoid
-    # pulling/installing iproute2 per drone.
-    ip_cmds = []
-
-    # Clean up any residual veth pairs in the host namespace first
-    for i, _, _ in drones:
-        veth_app = f"veth-d{i}-app"
-        ip_cmds.append(f"ip link del {veth_app} 2>/dev/null || true")
-
-    for i, app_pid, radio_pid in drones:
-        veth_app = f"veth-d{i}-app"
-        veth_radio = f"veth-d{i}-radio"
-        ip_cmds.extend([
-            f"ip link add {veth_app} type veth peer name {veth_radio}",
-            f"ip link set {veth_app} netns {app_pid}",
-            f"ip link set {veth_radio} netns {radio_pid}",
-        ])
-
-    script = " && ".join(ip_cmds)
-    run(
-        f"docker run --rm --privileged --net=host --pid=host alpine "
-        f"sh -c 'apk add --no-cache -q iproute2 && {script}'",
-        check=True,
-    )
-
-    # Configure addressing and routing inside each container via docker exec
-    for i, _, _ in drones:
-        app_name = f"drone{i}_app"
-        radio_name = f"drone{i}_radio"
-        veth_app = f"veth-d{i}-app"
-        veth_radio = f"veth-d{i}-radio"
-
-        # Configure app side
-        for cmd in [
-            f"ip addr add 10.100.{i}.1/30 dev {veth_app}",
-            f"ip link set {veth_app} up",
-            f"ip route add 172.31.0.0/24 via 10.100.{i}.2",
-        ]:
-            run(f"docker exec {app_name} {cmd}")
-
-        # Configure radio side
-        for cmd in [
-            f"ip addr add 10.100.{i}.2/30 dev {veth_radio}",
-            f"ip link set {veth_radio} up",
-        ]:
-            run(f"docker exec {radio_name} {cmd}")
-
-        print(f"  Veth pair configured for drone {i}: "
-              f"10.100.{i}.1 (app) <-> 10.100.{i}.2 (radio)")
-
-
 def launch(drone_count, with_base_station=False):
     """Launch the MANET simulator with N drones."""
     print(f"\n=== Launching MANET Chaos Simulator ===")
@@ -175,12 +87,6 @@ def launch(drone_count, with_base_station=False):
         env = f"DRONE_ID={i} DRONE_COUNT={drone_count}"
         compose_files = "-f drone/compose.radio.yml -f drone/compose.app.yml"
         run(f"{env} docker compose {compose_files} -p drone{i} up -d --build")
-
-    # Create veth pairs connecting app containers directly to radio containers.
-    # This bypasses Docker bridge networking (and br_netfilter) for routed
-    # inter-drone traffic. See design_doc.md section 2.2.
-    print("\nSetting up veth pairs...")
-    setup_veth_pairs(drone_count)
 
     print(f"\n{'='*50}")
     print(f"  MANET Simulator Ready")
@@ -216,16 +122,6 @@ def stop():
     # Stop control plane
     print("Stopping control plane...")
     run("docker compose down", check=False)
-
-    # Clean up any residual veth pairs left in the host namespace
-    print("Cleaning up veth pairs...")
-    run(
-        "docker run --rm --privileged --net=host alpine "
-        "sh -c 'apk add --no-cache -q iproute2 && "
-        "for iface in $(ip -o link show | grep -oE \"veth-d[0-9]+-app\"); do "
-        "ip link del \"$iface\" 2>/dev/null || true; done'",
-        check=False,
-    )
 
     # Remove shared resources
     print("Removing shared network...")

@@ -15,87 +15,63 @@ We need to simulate a multi-drone MANET (Mobile Ad-hoc Network) where each drone
 
 # 2. Architecture Overview
 
-## 2.1 Radio-Per-Drone Design
+## 2.1 Shared Network Namespace Design
 
-Each drone has two containers:
+All containers within a drone share the radio's network namespace via Docker's `network_mode: "service:radio"`. This mirrors a real drone where all software shares the same network interfaces provided by the radio hardware.
 
-- **Radio sidecar** (`droneX_radio`): A Python-based network emulator that sits on both the MANET mesh network and the drone's internal network. It handles routing, NAT, traffic shaping (tc/netem), link quality calculation, probing, and exposes an HTTP API for control.
-- **App container(s)** (`droneX_app`, plus any user-added services): The drone's actual software, running on the internal network only.
+- **Radio sidecar** (`droneX_radio`): A Python-based network emulator on the MANET mesh network. It handles traffic shaping (tc/netem), link quality calculation, probing, and exposes an HTTP API for control.
+- **App container(s)** (`droneX_app1`, `droneX_app2`, etc.): The drone's actual software. They share the radio's network namespace and can bind directly to the MANET IP.
 
-The radio sidecar acts as a router/gateway. App containers reach other drones by routing through the radio. The radio applies tc netem rules on the MANET interface to simulate link degradation per destination.
+Because all containers share the same netns:
+- Apps bind to `0.0.0.0:<port>` and are reachable at `172.31.0.1X:<port>` from other drones
+- Inter-service comms within a drone go over localhost (the kernel routes local-destined traffic through loopback, bypassing the MANET interface entirely)
+- Traffic to other drones exits through the MANET interface where tc rules apply shaping
+- No NAT, no route injection, no veth pairs needed
 
 ## 2.2 Network Layout
 
-Each drone N has three network attachments on the radio:
+Each drone's radio has two network attachments:
 
 | Interface | Network | Address | Purpose |
 |-----------|---------|---------|---------|
 | ethX (manet) | `manet_mesh` (172.31.0.0/24) | 172.31.0.1N | Inter-drone radio traffic, tc rules applied here |
 | ethY (control) | `manet_control` | DHCP | Control plane (UI communicates with radios) |
-| ethZ (internal) | `droneN_internal` (10.N.0.0/16) | 10.N.0.2 | Internal comms with app containers |
 
-Additionally, a **veth pair** connects each app container directly to its radio:
+All app containers see these same interfaces via the shared network namespace. There is no internal bridge network.
 
-| End | Address | Location |
-|-----|---------|----------|
-| `veth-dN-app` | 10.100.N.1/30 | Inside app container |
-| `veth-dN-radio` | 10.100.N.2/30 | Inside radio container |
+## 2.3 Traffic Path
 
-The veth pair bypasses Docker bridge networking for routed inter-drone traffic. This avoids issues with `br_netfilter`, which can drop or interfere with packets whose destination IP is outside the bridge subnet (see Section 2.3).
-
-## 2.3 Why Veth Pairs Instead of Docker Bridge Routing
-
-Docker's `br_netfilter` kernel module causes host-level iptables rules to be applied to bridged (layer-2) traffic. When a container on a Docker bridge sends a packet to an IP outside the bridge's subnet (e.g., 172.31.0.X from a 10.N.0.0/16 bridge), the host's iptables FORWARD chain can drop it before it ever reaches the gateway container.
-
-Veth pairs are point-to-point kernel links between two network namespaces. They do not traverse any bridge and are invisible to `br_netfilter`. By routing inter-drone traffic over a veth directly from the app to the radio, we completely sidestep this issue.
-
-## 2.4 Traffic Path
-
-**Outbound: drone2_app sends to drone3_app (e.g., iperf to 172.31.0.13:5001)**
+**Inter-drone: drone2_app1 sends to drone3_app2 (e.g., iperf to 172.31.0.13:5001)**
 
 ```
-drone2_app (10.100.2.1)
-  -> ip route 172.31.0.0/24 via 10.100.2.2
-  -> veth pair to drone2_radio (10.100.2.2)
-  -> MASQUERADE (src rewritten: 10.100.2.1 -> 172.31.0.12)
-  -> tc netem on manet interface (latency/loss/bandwidth shaping applied)
+drone2_app1 (shares drone2_radio netns)
+  -> binds to / sends from 172.31.0.12
+  -> tc netem on manet interface (latency/loss/bandwidth shaping applied on egress)
   -> manet_mesh network
   -> drone3_radio (172.31.0.13)
-  -> DNAT (dst rewritten: 172.31.0.13 -> 10.100.3.1)
-  -> FORWARD via veth pair
-  -> drone3_app (10.100.3.1)
+  -> tc netem on drone3's manet interface (shaping applied on drone3's egress for return traffic)
+  -> drone3_app2 receives on 172.31.0.13:5001 (same netns)
 ```
 
-**Return path is handled automatically by conntrack** - reply packets are de-DNATted and de-MASQUERADEd in reverse.
+No NAT, no DNAT, no conntrack. Source IPs are preserved end-to-end.
 
-**Internal traffic (drone2_app to drone2_radio on 10.2.0.X)** stays on the Docker bridge and is never shaped.
-
-## 2.5 NAT Rules on Each Radio
+**Intra-drone: drone2_app1 talks to drone2_app2**
 
 ```
-# Outbound: rewrite app's veth source to the radio's manet IP
-iptables -t nat -A POSTROUTING -o <manet_iface> -s 10.100.N.0/30 -j MASQUERADE
-
-# Inbound: forward manet traffic to the app via veth
-# (exclude radio's own service ports)
-iptables -t nat -A PREROUTING -i <manet_iface> -d 172.31.0.1N -p tcp --dport 8080 -j ACCEPT
-iptables -t nat -A PREROUTING -i <manet_iface> -d 172.31.0.1N -p tcp --dport 9000 -j ACCEPT
-iptables -t nat -A PREROUTING -i <manet_iface> -d 172.31.0.1N -p udp --dport 9001 -j ACCEPT
-iptables -t nat -A PREROUTING -i <manet_iface> -d 172.31.0.1N -j DNAT --to-destination 10.100.N.1
-
-# Allow forwarding between veth and manet
-iptables -P FORWARD ACCEPT
+drone2_app1 -> localhost / 172.31.0.12 -> kernel loopback -> drone2_app2
 ```
 
-## 2.6 Component Summary
+Traffic to a local IP is routed through loopback by the kernel. It never touches the MANET interface and is completely unaffected by tc shaping.
+
+## 2.4 Component Summary
 
 | Component | Quantity | Role |
 |-----------|----------|------|
-| Radio sidecar | 1 per drone | Routes, NATs, shapes, probes, exposes API |
-| App container(s) | 1+ per drone | User's drone software on internal network |
+| Radio sidecar | 1 per drone | Shapes traffic, probes peers, exposes API |
+| App container(s) | 1+ per drone | User's drone software (shared netns with radio) |
 | Base station radio | 0 or 1 | Star topology hub (DRONE_ID=0) |
 | Control plane UI | 1 | Web UI for visualization and runtime control |
-| launch.py | 1 | Orchestrates startup: networks, compose stacks, veth pairs |
+| launch.py | 1 | Orchestrates startup: networks, compose stacks |
 
 # 3. Traffic Shaping
 
@@ -175,34 +151,32 @@ Each radio also runs probe servers:
 - **TCP server** on port 9000 (echo)
 - **UDP server** on port 9001 (echo)
 
-Probes run every 2 seconds to each peer: ICMP ping, TCP connect, UDP echo. Results are written to a shared metrics volume as JSON.
+Probes run on a 1-second cycle to each peer: ICMP ping, TCP connect, UDP echo. Traffic stats are updated and written to the shared metrics volume every 500ms on a separate timer, independent of probe completion.
 
 # 6. Launch Process
 
 `launch.py` orchestrates the full startup sequence:
 
 1. Create shared Docker network `manet_mesh` (172.31.0.0/24) and volume `manet_metrics`
-2. Start the control plane UI (`docker-compose.yml`)
+2. Start the control plane UI (`docker-compose.yml` - also creates the `manet_control` network)
 3. Start base station if star topology (`base_station/compose.yml`)
 4. For each drone: start radio + app stack (`drone/compose.radio.yml` + `drone/compose.app.yml`)
-5. Create veth pairs connecting each app container to its radio container:
-   - Get PIDs of app and radio containers
-   - Run a privileged Alpine container with host network/PID namespace to create veth pairs and move them into the correct namespaces
-   - Configure IP addressing and routes inside each container via `docker exec`
 
-Teardown (`launch.py down`) stops all compose projects, cleans up residual veth pairs from the host namespace, and removes the shared network.
+No post-startup network configuration is needed. App containers join the radio's network namespace via `network_mode: "service:radio"` and have immediate access to the MANET interface.
+
+Teardown (`launch.py down`) stops all compose projects and removes the shared network.
 
 # 7. File Structure
 
 ```
 network_chaos_sim/
-├── launch.py                  # Orchestrator: up/down, veth setup
+├── launch.py                  # Orchestrator: up/down
 ├── config.yaml                # Radio, distance, environment, topology config
 ├── docker-compose.yml         # Control plane UI
 ├── design_doc.md              # This document
 ├── radio/
 │   ├── Dockerfile             # Python 3.11 Alpine + iproute2/iptables
-│   └── radio.py               # Radio sidecar: routing, shaping, API, probes
+│   └── radio.py               # Radio sidecar: shaping, API, probes
 ├── drone/
 │   ├── compose.radio.yml      # Radio infrastructure (networks, radio service)
 │   └── compose.app.yml        # User's drone software (customize this)
@@ -221,11 +195,9 @@ network_chaos_sim/
 | Network | Subnet | Purpose |
 |---------|--------|---------|
 | MANET mesh | 172.31.0.0/24 | Inter-drone radio traffic. Drone N = 172.31.0.1N, base station = 172.31.0.10 |
-| Drone N internal bridge | 10.N.0.0/16 | Internal comms within drone N. Radio = 10.N.0.2, gateway = 10.N.0.1 |
-| Drone N veth pair | 10.100.N.0/30 | Point-to-point app-to-radio link. App = 10.100.N.1, radio = 10.100.N.2 |
 | Control network | DHCP | UI <-> radio API communication |
 
-App containers reach other drones via: `ip route add 172.31.0.0/24 via 10.100.N.2`
+All containers within a drone share the radio's MANET IP. There are no per-service IPs. Apps reach other drones by sending to `172.31.0.1X`.
 
 # 9. Host Safety
 
@@ -233,49 +205,33 @@ All resources are ephemeral and scoped to container network namespaces:
 
 | Resource | Scope | Cleanup |
 |----------|-------|---------|
-| veth pairs | Kernel; destroyed when either container is removed | Automatic (+ explicit cleanup in `launch.py down`) |
 | tc qdisc/filter/class | Inside radio container netns | Destroyed with container |
-| iptables NAT/FORWARD rules | Inside radio container netns | Destroyed with container |
 | ip_forward sysctl | Inside container netns; does not affect host | Destroyed with container |
 | Docker networks | Docker-managed | Removed by `launch.py down` |
 
-`launch.py` never modifies the host's routing table, iptables, or persistent network config.
+`launch.py` never modifies the host's routing table, iptables, or persistent network config. There are no privileged helper containers, no host namespace manipulation, and no veth pairs to clean up.
 
 # 10. Limitations
 
 ### MANET IP scheme limits drone count to 9
 The addressing `172.31.0.1{DRONE_ID}` means drone 10 would be `172.31.0.110`, which overflows the /24 subnet semantics. Max usable drones: 9 (IDs 1-9). Fixing this requires a different IP scheme (e.g., `172.31.0.{10 + DRONE_ID}`).
 
-### Veth pair is per-app-container, not per-network
-The veth pair connects a single app container to the radio. If multiple services are defined in `compose.app.yml`, only the `app` service gets the veth. Other services on the internal bridge can route through the radio's bridge IP (10.N.0.2) but may hit `br_netfilter` issues. See Section 11 for solutions.
-
-### NAT hides source identity
-MASQUERADE rewrites the source IP to the radio's MANET address. The receiving drone sees traffic as coming from `172.31.0.1X`, not the original internal service IP. Per-source-service visibility is lost at the receiving end.
-
-### Container restarts break veth pairs
-If a radio or app container restarts, its veth pair and routes are lost. The simulator must be relaunched (`launch.py down` then `launch.py N`).
+### Port conflicts in shared namespace
+All containers in a drone share the same network namespace, so they cannot bind to the same port. The radio reserves ports 8080 (API), 9000 (TCP probe), and 9001 (UDP probe). App services must use different ports from each other and from the radio.
 
 ### tc netem is statistical
 Loss and delay are probabilistic. Short test runs show high variance. Use 100+ packets for meaningful measurements.
 
-### No inbound port mapping granularity
-The DNAT rule forwards all non-radio traffic to the single app container's veth IP. There is no way to direct specific ports to different internal services.
+### Shaping is egress-only
+tc rules are applied on the MANET interface's egress path. Ingress traffic is not shaped at the receiving radio - it was already shaped by the sending radio's egress rules. This means each direction of a link is shaped independently.
 
 # 11. Future Improvements
-
-### Bridge-level veth for multi-service support
-Instead of connecting the veth to a single app container, attach one end to the Docker bridge (`droneN_internal`) itself. All containers on the bridge would then benefit from the veth routing without needing individual veth pairs. This would require modifying `launch.py` to create the veth with one end in the radio container and the other added as a port on the Docker bridge.
-
-Alternatively, widen the MASQUERADE source match to include the full bridge subnet (`10.N.0.0/16`) and add a route on each service container (`172.31.0.0/24 via 10.N.0.2`) to go through the Docker bridge to the radio. This is simpler but reintroduces `br_netfilter` exposure for the internal leg - testing is needed to confirm whether this causes problems in practice.
 
 ### Better MANET addressing
 Switch to `172.31.0.{10 + DRONE_ID}` to support more drones, or use a larger subnet.
 
-### DNAT port mapping
-Allow `compose.app.yml` to declare port mappings so that specific inbound ports on the MANET IP can be directed to different internal services.
-
 ### Asymmetric link profiles
 Currently link quality is symmetric (same distance = same degradation in both directions). Add support for asymmetric uplink/downlink characteristics per drone.
 
-### Container restart resilience
-Detect container restarts and automatically re-establish veth pairs and routes without a full relaunch.
+### Ingress shaping
+Add IFB (Intermediate Functional Block) devices to shape incoming traffic, allowing the receiving radio to also enforce bandwidth limits on ingress.
