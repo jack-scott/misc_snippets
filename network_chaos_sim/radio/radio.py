@@ -26,7 +26,7 @@ DRONE_ID = int(os.environ.get("DRONE_ID", 1))
 DRONE_COUNT = int(os.environ.get("DRONE_COUNT", 3))
 METRICS_DIR = Path("/metrics")
 CONFIG_DIR = Path("/config")
-PROBE_INTERVAL = 2
+PROBE_INTERVAL = 1
 
 # Load configuration
 def load_config():
@@ -582,7 +582,7 @@ probe_results = {}
 def probe_ping(target_id):
     """Ping another drone."""
     target_ip = get_drone_ip(target_id)
-    ok, output = run_cmd(f"ping -c 1 -W 2 {target_ip}")
+    ok, output = run_cmd(f"ping -c 1 -W 1 {target_ip}")
     if ok and "time=" in output:
         try:
             time_str = output.split("time=")[1].split()[0]
@@ -596,7 +596,7 @@ def probe_tcp(target_id):
     target_ip = get_drone_ip(target_id)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
+        sock.settimeout(1)
         sock.connect((target_ip, 9000))
         sock.send(b"PING\n")
         data = sock.recv(64)
@@ -610,7 +610,7 @@ def probe_udp(target_id):
     target_ip = get_drone_ip(target_id)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(2)
+        sock.settimeout(1)
         sock.sendto(b"PING", (target_ip, 9001))
         data, _ = sock.recvfrom(64)
         sock.close()
@@ -618,12 +618,16 @@ def probe_udp(target_id):
     except (socket.error, socket.timeout):
         return False
 
+def stats_loop():
+    """Update traffic stats and write metrics on a fast timer."""
+    while True:
+        update_traffic_stats()
+        write_metrics()
+        time.sleep(0.5)
+
 def probe_loop():
     """Continuously probe other drones."""
     while True:
-        # Update traffic statistics
-        update_traffic_stats()
-
         targets = get_other_drones()
         for target_id in targets:
             quality = state.link_quality.get(target_id, {})
@@ -647,7 +651,6 @@ def probe_loop():
                 "dropped_sec": link_traffic.get("dropped_sec", 0),
             }
 
-        write_metrics()
         time.sleep(PROBE_INTERVAL)
 
 def write_metrics():
@@ -668,8 +671,10 @@ def write_metrics():
         "traffic": state.traffic_stats,
     }
 
-    with open(metrics_file, "w") as f:
+    tmp_file = metrics_file.with_suffix(".tmp")
+    with open(tmp_file, "w") as f:
         json.dump(data, f)
+    tmp_file.rename(metrics_file)
 
 # TCP/UDP probe servers
 def start_tcp_server():
@@ -895,6 +900,7 @@ def main():
     # Start servers
     threading.Thread(target=start_tcp_server, daemon=True).start()
     threading.Thread(target=start_udp_server, daemon=True).start()
+    threading.Thread(target=stats_loop, daemon=True).start()
     threading.Thread(target=probe_loop, daemon=True).start()
 
     # Start HTTP API

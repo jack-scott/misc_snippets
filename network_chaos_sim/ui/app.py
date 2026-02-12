@@ -931,7 +931,7 @@ HTML_TEMPLATE = """
 
         // Initial load and refresh
         fetchMetrics();
-        setInterval(fetchMetrics, 2000);
+        setInterval(fetchMetrics, 1000);
     </script>
 </body>
 </html>

@@ -9,7 +9,7 @@ radio:
 
   # Base station (only used in star topology)
   base_station:
-    bandwidth_kbps: 2000  # Base station often has better hardware
+    bandwidth_kbps: 1000  # Base station often has better hardware
     position:
       x: 0
       y: 0
