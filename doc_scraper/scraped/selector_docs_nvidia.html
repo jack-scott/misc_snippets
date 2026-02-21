@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Visual Selector Tool</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+
+        #control-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #2c3e50;
+            color: white;
+            padding: 15px;
+            z-index: 10000;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        #control-panel h2 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+
+        #control-panel button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            margin: 5px 5px 5px 0;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        #control-panel button:hover {
+            background: #2980b9;
+        }
+
+        #selected-list {
+            margin-top: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            background: #34495e;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .selected-item {
+            background: #16a085;
+            padding: 5px 10px;
+            margin: 5px 0;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .selected-item button {
+            background: #e74c3c;
+            padding: 2px 8px;
+            font-size: 11px;
+            margin: 0;
+        }
+
+        #content {
+            margin-top: 280px;
+            padding: 20px;
+        }
+
+        .highlight-hover {
+            outline: 3px solid #3498db !important;
+            background-color: rgba(52, 152, 219, 0.1) !important;
+            cursor: pointer !important;
+        }
+
+        .highlight-selected {
+            outline: 3px solid #27ae60 !important;
+            background-color: rgba(39, 174, 96, 0.2) !important;
+        }
+
+        #instructions {
+            background: #95a5a6;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div id="control-panel">
+        <h2>🎯 Visual Selector Tool - Click elements to select them</h2>
+        <div id="instructions">
+            <strong>Instructions:</strong> Hover over elements below and click to select. Selected CSS selectors will appear below.
+            When done, click "Copy Selectors" and paste them when prompted in the terminal.
+        </div>
+        <div>
+            <button onclick="copySelectors()">📋 Copy Selectors</button>
+            <button onclick="clearSelections()">🗑️ Clear All</button>
+            <button onclick="toggleMode()">🔧 Toggle: <span id="mode-text">CSS Selector</span></button>
+        </div>
+        <div id="selected-list">
+            <div style="color: #bdc3c7; font-size: 12px;">No elements selected yet. Click on elements below to select them.</div>
+        </div>
+    </div>
+
+    <div id="content">
+        <!DOCTYPE html><html class="csstransforms csstransforms3d csstransitions">
+
+<body style="">
+  <!--Navbar-->
+  
+  <div id="wrapper" style="">
+    <div class="container">
+      <div class="row">
+        <div class="col-xs-12">
+          <div class="page-header">
+            <h1>Jetson Software Documentation</h1>
+          </div>
+          <p>
+            Select the documentation center to browse.
+          </p>
+          <div class="row">
+            <div class="col-sm-6">
+              <div class="row">
+                <div class="col-sm-4">
+                  <a href="https://docs.nvidia.com/jetson/jetpack/index.html"><img src="https://docs.nvidia.com/jetson/images/jetpack-image.jpg" width="100%"></a>
+                </div>
+                <div class="col-sm-8">
+                  <b><a href="https://docs.nvidia.com/jetson/jetpack/index.html">JetPack</a></b><br>
+                  JetPack SDK is the most comprehensive solution for building AI applications. Use the JetPack installer to flash your Jetson Developer Kit with the latest OS image, and to install developer tools, libraries and APIs, samples, and documentation.<br><br>
+                  <p>
+                    <a href="https://docs.nvidia.com/jetson/jetpack/index.html">JetPack SDK</a> | <a href="https://developer.nvidia.com/embedded/downloads#?search=JetPack">Supplemental Documentation</a>
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-sm-6">
+                <div class="row">
+                  <div class="col-sm-4">
+                    <a href="https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/index.html"><img src="https://docs.nvidia.com/jetson/images/jetpack-image.jpg" width="100%"></a>
+                  </div>
+                  <div class="col-sm-8">
+                    <b><a href="https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/index.html">Jetson Linux</a></b><br>
+                    NVIDIA Jetson Linux supports development on the Jetson Platform.<br><br>
+                    <p>
+                      Release 38.4: <a href="https://docs.nvidia.com/jetson/archives/r38.4/DeveloperGuide/index.html">Developer&nbsp;Guide</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/r38.4/ReleaseNotes/Jetson_Linux_Release_Notes_r38.4.pdf">Release&nbsp;Notes</a>
+                      <br>
+                      Release 36.4.4: <a href="https://docs.nvidia.com/jetson/archives/r36.4.4/DeveloperGuide/index.html">Developer&nbsp;Guide</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/r36.4.3/spe/index.html">Sensor&nbsp;Processing&nbsp;Engine Developer&nbsp;Guide (r36.4.3)</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/r36.4.4/ReleaseNotes/Jetson_Linux_Release_Notes_r36.4.4.pdf">Release&nbsp;Notes</a>
+                      <br>
+                      Release 35.6.1: <a href="https://docs.nvidia.com/jetson/archives/r35.6.1/DeveloperGuide/index.html">Developer&nbsp;Guide</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/r35.6.0/spe/index.html">Sensor&nbsp;Processing&nbsp;Engine Developer&nbsp;Guide (r35.6.0)</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/r35.6.1/ReleaseNotes/Jetson_Linux_Release_Notes_r35.6.1.pdf">Release&nbsp;Notes</a>
+                      <br>
+                      Release 32.7.6: <a href="https://docs.nvidia.com/jetson/archives/l4t-archived/l4t-3276/index.html">Developer&nbsp;Guide</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/spe-archived/spe-3275/index.html">Sensor&nbsp;Processing&nbsp;Engine Developer&nbsp;Guide (r32.7.5)</a> |
+                      <a href="https://docs.nvidia.com/jetson/archives/l4t-archived/l4t-3276/pdf/Jetson_Linux_Release_Notes_R32.7.6_GA.pdf">Release&nbsp;Notes</a>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <br><br>
+
+          <div class="row">
+            <div class="col-sm-6">
+              <div class="row">
+                <div class="col-sm-4">
+                  <a href="https://docs.nvidia.com/jetson/archives/r38.2/ApiReference/index.html"><img src="https://docs.nvidia.com/jetson/images/jetpack-image.jpg" width="100%"></a>
+                </div>
+                <div class="col-sm-8">
+                  <b><a href="https://docs.nvidia.com/jetson/archives/r38.2/ApiReference/index.html">Jetson Linux APIs</a></b><br>
+                  The Jetson Linux APIs provide additional functionality to support application development. The APIs enable flexibility by providing better control over the underlying hardware blocks.<br><br>
+                  <p>
+                    Release 38.2.0: <a href="https://docs.nvidia.com/jetson/archives/r38.2/ApiReference/index.html">API Reference</a><br>
+                    Release 36.4.3: <a href="https://docs.nvidia.com/jetson/archives/r36.4.3/ApiReference/index.html">API Reference</a><br>
+                    Release 35.6.0: <a href="https://docs.nvidia.com/jetson/archives/r35.6.0/ApiReference/index.html">API Reference</a><br>
+                    Release 32.7.6: <a href="https://docs.nvidia.com/jetson/archives/l4t-multimedia-archived/l4t-multimedia-3276/index.html">API Reference</a>
+                  </p>
+                </div>
+              </div>
+            </div>
+            <br><br>
+            <div class="row">
+              <div class="col-sm-6">
+                <div class="row">
+                  <div class="col-sm-4">
+                    <a href="https://docs.nvidia.com/jetson/jps/index.html"><img src="https://docs.nvidia.com/jetson/images/jetpack-image.jpg" width="100%"></a>
+                  </div>
+                  <div class="col-sm-8">
+                    <b><a href="https://docs.nvidia.com/jetson/jps/index.html">JPS</a></b><br>
+                    Jetson Platform Services documentation.<br><br>
+                    <a class="btn btn-success" href="https://docs.nvidia.com/jetson/jps/index.html">Browse <i>&gt;</i></a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <br>
+            <div class="row">
+              <div class="col-sm-6">
+                <div class="row">
+                  <div class="col-sm-4">
+                    <a href="https://docs.nvidia.com/jetson/archives/index.html"><img src="https://docs.nvidia.com/jetson/images/jetpack-image.jpg" width="100%"></a>
+                  </div>
+                  <div class="col-sm-8">
+                    <b><a href="https://docs.nvidia.com/jetson/archives/index.html">Archives</a></b><br>
+                    This Archives section provides access to previously released JetPack, Jetson Linux, and Jetson Linux API documentation versions.<br><br>
+                    <a class="btn btn-success" href="https://docs.nvidia.com/jetson/archives/index.html">Browse <i>&gt;</i></a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <br><br>
+          </div>
+          <br><br>
+        </div>
+        <br><br>
+      </div>
+
+      <div id="cboxOverlay" style="display: none;"></div>
+      <div id="colorbox" class="" role="dialog" tabindex="-1" style="display: none;">
+        <div id="cboxWrapper">
+          <div>
+            <div id="cboxTopLeft" style="float: left;"></div>
+            <div id="cboxTopCenter" style="float: left;"></div>
+            <div id="cboxTopRight" style="float: left;"></div>
+          </div>
+          <div style="clear: left;">
+            <div id="cboxMiddleLeft" style="float: left;"></div>
+            <div id="cboxContent" style="float: left;">
+              <div id="cboxTitle" style="float: left;"></div>
+              <div id="cboxCurrent" style="float: left;"></div>
+              <button type="button" id="cboxPrevious"></button>
+              <button type="button" id="cboxNext"></button>
+              <button id="cboxSlideshow"></button>
+              <div id="cboxLoadingOverlay" style="float: left;"></div>
+              <div id="cboxLoadingGraphic" style="float: left;"></div>
+            </div>
+            <div id="cboxMiddleRight" style="float: left;"></div>
+          </div>
+          <div style="clear: left;">
+            <div id="cboxBottomLeft" style="float: left;"></div>
+            <div id="cboxBottomCenter" style="float: left;"></div>
+            <div id="cboxBottomRight" style="float: left;"></div>
+          </div>
+        </div>
+        <div style="position: absolute; width: 9999px; visibility: hidden; display: none; max-width: none;"></div>
+      </div>
+      <div id="sidr" class="sidr left">
+        <div class="sidr-inner">
+          <ul class="nav navbar-nav">
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+</body></html>
+    </div>
+
+    <script>
+        let selectedElements = new Set();
+        let selectorMode = 'css'; // 'css' or 'xpath'
+
+        // Get CSS selector for an element (simplified version)
+        function getCssSelector(el) {
+            // Prefer ID if available
+            if (el.id) return '#' + el.id;
+
+            // Try to find a unique class
+            if (el.className) {
+                let classes = el.className.trim().split(/\s+/).filter(c => c && !c.startsWith('highlight'));
+
+                // Try each class to see if it's unique enough
+                for (let cls of classes) {
+                    let selector = el.tagName.toLowerCase() + '.' + cls;
+                    try {
+                        let matches = document.querySelectorAll(selector);
+                        if (matches.length < 5) {  // Reasonably unique
+                            return selector;
+                        }
+                    } catch(e) {}
+                }
+
+                // Fall back to first class
+                if (classes.length > 0) {
+                    return el.tagName.toLowerCase() + '.' + classes[0];
+                }
+            }
+
+            // Fall back to tag name with context
+            let parent = el.parentNode;
+            if (parent && parent.id) {
+                return '#' + parent.id + ' > ' + el.tagName.toLowerCase();
+            }
+
+            if (parent && parent.className) {
+                let parentClass = parent.className.trim().split(/\s+/)[0];
+                if (parentClass && !parentClass.startsWith('highlight')) {
+                    return '.' + parentClass + ' > ' + el.tagName.toLowerCase();
+                }
+            }
+
+            // Last resort - just tag name
+            return el.tagName.toLowerCase();
+        }
+
+        // Get XPath for an element
+        function getXPath(el) {
+            if (el.id) return '//*[@id="' + el.id + '"]';
+
+            let path = [];
+            while (el && el.nodeType === Node.ELEMENT_NODE) {
+                let index = 0;
+                let sibling = el.previousSibling;
+
+                while (sibling) {
+                    if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === el.nodeName) {
+                        index++;
+                    }
+                    sibling = sibling.previousSibling;
+                }
+
+                let tagName = el.nodeName.toLowerCase();
+                let pathIndex = index > 0 ? '[' + (index + 1) + ']' : '';
+                path.unshift(tagName + pathIndex);
+                el = el.parentNode;
+            }
+
+            return '/' + path.join('/');
+        }
+
+        function getSelector(el) {
+            return selectorMode === 'css' ? getCssSelector(el) : getXPath(el);
+        }
+
+        function toggleMode() {
+            selectorMode = selectorMode === 'css' ? 'xpath' : 'css';
+            document.getElementById('mode-text').textContent = selectorMode === 'css' ? 'CSS Selector' : 'XPath';
+            updateSelectedList();
+        }
+
+        function updateSelectedList() {
+            const list = document.getElementById('selected-list');
+            if (selectedElements.size === 0) {
+                list.innerHTML = '<div style="color: #bdc3c7; font-size: 12px;">No elements selected yet.</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            selectedElements.forEach(selector => {
+                const div = document.createElement('div');
+                div.className = 'selected-item';
+                div.innerHTML = `
+                    <span>${selector}</span>
+                    <button onclick="removeSelector('${selector.replace(/'/g, "\\'")}')">Remove</button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function removeSelector(selector) {
+            selectedElements.delete(selector);
+
+            // Remove highlight from element
+            const elements = document.querySelectorAll('.highlight-selected');
+            elements.forEach(el => {
+                if (getSelector(el) === selector) {
+                    el.classList.remove('highlight-selected');
+                }
+            });
+
+            updateSelectedList();
+        }
+
+        function clearSelections() {
+            selectedElements.clear();
+            document.querySelectorAll('.highlight-selected').forEach(el => {
+                el.classList.remove('highlight-selected');
+            });
+            updateSelectedList();
+        }
+
+        function copySelectors() {
+            const selectors = Array.from(selectedElements).join(',');
+            navigator.clipboard.writeText(selectors).then(() => {
+                alert('✓ Selectors copied to clipboard!\n\n' + selectors + '\n\nNow paste them in the terminal.');
+            }).catch(() => {
+                alert('Selectors (copy manually):\n\n' + selectors);
+            });
+        }
+
+        // Setup hover and click handlers
+        document.getElementById('content').addEventListener('mouseover', (e) => {
+            if (e.target.closest('#control-panel')) return;
+            e.target.classList.add('highlight-hover');
+        });
+
+        document.getElementById('content').addEventListener('mouseout', (e) => {
+            e.target.classList.remove('highlight-hover');
+        });
+
+        document.getElementById('content').addEventListener('click', (e) => {
+            if (e.target.closest('#control-panel')) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const selector = getSelector(e.target);
+
+            if (selectedElements.has(selector)) {
+                selectedElements.delete(selector);
+                e.target.classList.remove('highlight-selected');
+            } else {
+                selectedElements.add(selector);
+                e.target.classList.add('highlight-selected');
+            }
+
+            updateSelectedList();
+        });
+    </script>
+</body>
+</html>

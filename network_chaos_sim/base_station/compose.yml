@@ -1,0 +1,38 @@
+# Base Station - Used in star topology
+#
+# The base station acts as the central hub that all drones communicate through.
+# In star topology, drones can only reach the base station, not each other directly.
+
+services:
+  radio:
+    build:
+      context: ../radio
+    container_name: base_station_radio
+    hostname: base_station
+    stop_grace_period: 2s
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - DRONE_ID=0
+      - DRONE_COUNT=${DRONE_COUNT}
+    volumes:
+      - manet_metrics:/metrics
+      - ../config.yaml:/config/config.yaml:ro
+    networks:
+      manet:
+        ipv4_address: 172.31.0.10
+      control:
+
+networks:
+  manet:
+    name: manet_mesh
+    external: true
+
+  control:
+    name: manet_control
+    external: true
+
+volumes:
+  manet_metrics:
+    name: manet_metrics
+    external: true

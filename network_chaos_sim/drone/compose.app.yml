@@ -1,0 +1,74 @@
+# Drone Software - CUSTOMIZE THIS FILE
+#
+# Add your drone services here. They will be launched alongside the radio.
+#
+# All services share the radio's network namespace (network_mode: "service:radio").
+# This means:
+#   - Your services share the radio's MANET IP (172.31.0.1X)
+#   - Bind to 0.0.0.0:<port> to accept connections from other drones
+#   - Inter-service comms within this drone go over localhost (unaffected by shaping)
+#   - Traffic to other drones goes through the MANET interface (shaped by tc)
+#   - Avoid ports 8080, 9000, 9001 (used by the radio)
+#
+# To reach other drones:
+#   - Ping/UDP/TCP to 172.31.0.1X where X is the drone ID
+#
+# Environment variables available:
+#   - DRONE_ID: This drone's ID (1, 2, 3, ...)
+#   - DRONE_COUNT: Total number of drones
+
+services:
+  # ===========================================
+  # YOUR DRONE SOFTWARE HERE
+  # ===========================================
+
+  app1:
+    image: alpine:latest
+    container_name: drone${DRONE_ID}_app1
+    stop_grace_period: 2s
+    network_mode: "service:radio"
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools iperf
+        echo "Drone ${DRONE_ID} app1 starting..."
+        echo "MANET IP: 172.31.0.1${DRONE_ID}"
+        # Your application logic here
+        tail -f /dev/null
+    depends_on:
+      - radio
+
+  app2:
+    image: alpine:latest
+    container_name: drone${DRONE_ID}_app2
+    stop_grace_period: 2s
+    network_mode: "service:radio"
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache curl iproute2 iputils tcpdump traceroute bind-tools iperf
+        echo "Drone ${DRONE_ID} app2 starting..."
+        echo "MANET IP: 172.31.0.1${DRONE_ID}"
+        # Your application logic here
+        tail -f /dev/null
+    depends_on:
+      - radio
+
+  # Example: Add more services as needed
+  #
+  # ros_node:
+  #   image: ros:humble
+  #   container_name: drone${DRONE_ID}_ros
+  #   network_mode: "service:radio"
+  #   environment:
+  #     - ROS_DOMAIN_ID=${DRONE_ID}
+  #   depends_on:
+  #     - radio

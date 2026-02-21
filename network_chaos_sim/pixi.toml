@@ -1,0 +1,13 @@
+[workspace]
+authors = ["Jack Scott <jack.scott6@hotmail.co.uk>"]
+channels = ["conda-forge"]
+name = "network_chaos_sim"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+pytest = ">=9.0.2,<10"
+pyyaml = ">=6.0.3,<7"
+requests = ">=2.32,<3"
