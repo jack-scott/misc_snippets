@@ -18,6 +18,23 @@ services:
     networks:
       - control
 
+  foxglove_logger:
+    build:
+      context: ./foxglove_logger
+    container_name: manet_foxglove
+    stop_grace_period: 2s
+    ports:
+      - "8765:8765"   # WebSocket — connect Foxglove Studio here
+      - "9090:9090"   # HTTP ingest — drone apps POST /log here
+    environment:
+      - DRONE_COUNT=${DRONE_COUNT:-3}
+      - RECORD_MCAP=${RECORD_MCAP:-false}
+    volumes:
+      - manet_metrics:/metrics:ro
+      - manet_recordings:/recordings
+    networks:
+      - control
+
 networks:
   control:
     name: manet_control
@@ -25,3 +42,5 @@ networks:
 volumes:
   manet_metrics:
     name: manet_metrics
+  manet_recordings:
+    name: manet_recordings

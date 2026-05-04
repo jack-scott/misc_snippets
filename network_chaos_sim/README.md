@@ -19,6 +19,8 @@ Network chaos testing for drone MANET (Mobile Ad-hoc Network) simulation.
 # Open UI
 open http://localhost:8080
 
+# Connect Foxglove Studio to ws://localhost:8765
+
 # Stop everything
 ./launch.py down
 ```
@@ -100,6 +102,52 @@ networks:
 - Connect services to the `internal` network only
 - Keep `NET_ADMIN` capability (needed for veth configuration by launch.py)
 - Other drones are reachable at `172.31.0.1X` where X is the drone ID
+
+## Foxglove Metrics Logger
+
+The `foxglove_logger` service starts automatically with `./launch.py`. Connect [Foxglove Studio](https://foxglove.dev) to `ws://localhost:8765`.
+
+**Channels:**
+- `/probe_metrics` — per-link probe results (ping_ms, tcp_ok, reachable, loss%) from each radio, updated every second
+- `/message_events` — app-layer delivery events (sent/received/failed) posted by your drone app code
+- `/network_state` — per-drone link quality, traffic rates, environment, and topology
+
+**Logging from your drone app:**
+
+```python
+import requests, time
+
+# Call this from your drone app code when sending/receiving messages
+def log_event(event: str, source: int, target: int, **kwargs):
+    requests.post("http://foxglove_logger:9090/log", json={
+        "event": event,      # "sent" | "received" | "failed" | "timeout"
+        "source": source,
+        "target": target,
+        "strategy": "my_protocol_v1",   # tag your comm strategy
+        **kwargs,
+    }, timeout=0.1)
+
+# When you send a message:
+log_event("sent", source=DRONE_ID, target=2, message_id="msg-001", payload_size=64)
+
+# When you receive a reply:
+log_event("received", source=2, target=DRONE_ID, message_id="msg-001", latency_ms=45.2)
+
+# When a message times out:
+log_event("timeout", source=DRONE_ID, target=2, message_id="msg-001")
+```
+
+**Plotting in Foxglove Studio:**
+- Use the **Plot** panel with `/probe_metrics.ping_ms` to see latency over time per link
+- Use the **Plot** panel with `/probe_metrics.reachable` to see connectivity state
+- Use the **Raw Messages** panel on `/message_events` to see delivery events
+
+**MCAP session recording** (for offline replay/analysis):
+
+```bash
+RECORD_MCAP=true ./launch.py 3
+# Sessions saved to Docker volume manet_recordings
+```
 
 ## Controller API
 

@@ -112,6 +112,6 @@ defaults:
   # Initial drone positions (can be updated via API)
   # If not specified, drones start at (0,0,0)
   positions:
-    1: { x: 0, y: 0, z: 50 }
-    2: { x: 100, y: 0, z: 50 }
-    3: { x: 0, y: 100, z: 50 }  # Triangle formation
+    1: { x: 0,  y: 0,  z: 0 }
+    2: { x: 10, y: 0,  z: 0 }
+    3: { x: 20, y: 0,  z: 0 }

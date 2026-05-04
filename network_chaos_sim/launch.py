@@ -92,14 +92,18 @@ def launch(drone_count, with_base_station=False):
     print(f"  MANET Simulator Ready")
     print(f"{'='*50}")
     print(f"  UI:           http://localhost:8080")
+    print(f"  Foxglove:     ws://localhost:8765  (connect Foxglove Studio here)")
+    print(f"  Log ingest:   http://localhost:9090/log  (POST from drone apps)")
     print(f"  Drones:       {drone_count}")
     if with_base_station:
         print(f"  Base Station: Yes (172.31.0.10)")
     print(f"  Config:       config.yaml")
     print()
     print("Commands:")
-    print("  docker logs -f drone1_radio   # View drone logs")
-    print("  ./launch.py down              # Stop everything")
+    print("  docker logs -f drone1_radio     # View drone logs")
+    print("  docker logs -f manet_foxglove   # View Foxglove logger logs")
+    print("  ./launch.py down                # Stop everything")
+    print("  RECORD_MCAP=true ./launch.py 3  # Launch with MCAP session recording")
     print()
 
 
