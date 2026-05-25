@@ -337,7 +337,7 @@ HTML_TEMPLATE = """
             <div class="control-row">
                 <div class="control-group">
                     <label>Z / Altitude (meters)</label>
-                    <input type="number" id="pos-z" value="50">
+                    <input type="number" id="pos-z" value="0">
                 </div>
             </div>
             <div style="margin-top: 15px;">
@@ -807,13 +807,13 @@ HTML_TEMPLATE = """
 
         function editPosition(droneId) {
             selectedDrone = droneId;
-            const pos = metrics[droneId]?.position || { x: 0, y: 0, z: 50 };
+            const pos = metrics[droneId]?.position || { x: 0, y: 0, z: 0 };
 
             document.getElementById('modal-title').textContent =
                 droneId === 0 ? 'Base Station Position' : `Drone ${droneId} Position`;
             document.getElementById('pos-x').value = pos.x || 0;
             document.getElementById('pos-y').value = pos.y || 0;
-            document.getElementById('pos-z').value = pos.z || 50;
+            document.getElementById('pos-z').value = pos.z ?? 0;
 
             document.getElementById('position-modal').classList.add('active');
         }

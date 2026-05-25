@@ -1,0 +1,44 @@
+[workspace]
+name = "reticulum-playground"
+version = "0.1.0"
+description = "Reticulum learning playground — experiments, tools and projects"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.11,<3.13"
+
+[pypi-dependencies]
+rns = "*"
+lxmf = "*"
+lxst = "*"
+colorama = "*"
+
+[feature.sideband.dependencies]
+opusfile = "*"
+
+[feature.sideband.pypi-dependencies]
+# Sideband GUI client — requires system audio libs (see docs/hardware.md)
+sbapp = "*"
+
+[feature.sideband.tasks]
+start_sideband = "sideband"
+
+[environments]
+default = { features = [], solve-group = "default" }
+sideband = { features = ["sideband"], solve-group = "sideband" }
+
+[tasks]
+
+# RNS daemon (interactive — run in a separate terminal)
+rnsd = "rnsd -v"
+
+# Install/uninstall rnsd as a systemd user service
+install_rnsd_service = "bash tools/install_rnsd_service.sh"
+uninstall_rnsd_service = "bash tools/install_rnsd_service.sh --uninstall"
+
+# Interface and network status
+status = "rnstatus"
+
+# Path table inspection
+paths = "rnpath -t"
