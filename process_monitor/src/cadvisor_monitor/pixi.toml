@@ -8,3 +8,7 @@ version = "*"
 
 [package.build.config]
 distro = "humble"
+
+[package.build-dependencies]
+scipy = "*"
+

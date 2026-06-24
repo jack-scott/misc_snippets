@@ -1,6 +1,6 @@
 [workspace]
 channels = [
-    "https://repo.prefix.dev/jacks-channel",  # ← YOUR CHANNEL FIRST
+    # "https://repo.prefix.dev/jacks-channel",  # ← YOUR CHANNEL FIRST
     "https://prefix.dev/robostack-humble",
     "https://prefix.dev/conda-forge",
 ]
@@ -9,13 +9,28 @@ preview = ["pixi-build"]
 
 [dependencies]
 python = ">=3.10"
-ros-humble-ros2run = "*"
+
+[feature.build.dependencies]
+colcon-common-extensions = "*"
+
+[feature.development.dependencies]
 ros-humble-ros2topic = "*"
+
+[feature.test.dependencies]
+colcon-common-extensions = "*"
+
+[feature.runtime.dependencies]
+ros-humble-ros2run = "*"
+
+[feature.deploy.dependencies]
 # ---- Comment out either the local or remote to switch between trying the different sources ----
 # DEVELOPMENT: Use local source for active changes
 ros-humble-cadvisor-monitor = { path = "src/cadvisor_monitor" }
 # DEPLOYEMENT: Use this upstream version after you have published the package (refer to README)
 # ros-humble-cadvisor-monitor = "0.1.*"
+
+[dev]
+ros-humble-cadvisor-monitor = { path = "src/cadvisor_monitor" }
 
 [tasks]
 # Standalone CLI tool (no ROS needed for display)
@@ -34,3 +49,7 @@ publish = """
     pixi build && \
     pixi upload prefix --channel jacks-channel --api-key $PREFIX_AUTH *.conda
 """
+
+[environments]
+default ={ features = ["test", "build", "runtime", "development"], solve-group = "main"}
+prod = {features = ["deploy", "runtime"], solve-group = "main"}

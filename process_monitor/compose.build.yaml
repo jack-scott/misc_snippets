@@ -1,0 +1,13 @@
+services:
+  prod:
+    build:
+      context: .
+      target: prod
+    image: cadvisor_prod:latest
+
+  dev:
+    build:
+      context: .
+      target: dev
+    image: cadvisor_dev:latest
+
