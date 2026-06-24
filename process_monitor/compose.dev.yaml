@@ -1,0 +1,20 @@
+services:
+  dev:
+    image: cadvisor_dev:latest
+    volumes:
+      # Source code — edit on host, changes visible immediately in container
+      - .:/workspace/process_monitor
+      # Persist build/install across container restarts without polluting host
+      - ros2_build:/workspace/ros2_ws/build
+      - ros2_install:/workspace/ros2_ws/install
+      - ros2_log:/workspace/ros2_ws/log
+    working_dir: /workspace/ros2_ws
+    # Keep container running so you can exec in and iterate
+    command: sleep infinity
+    stdin_open: true
+    tty: true
+
+volumes:
+  ros2_build:
+  ros2_install:
+  ros2_log:

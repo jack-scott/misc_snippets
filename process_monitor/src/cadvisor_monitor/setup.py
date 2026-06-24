@@ -19,6 +19,9 @@ setup(
     maintainer_email='jack@example.com',
     description='ROS 2 node for publishing container metrics from cAdvisor',
     license='MIT',
+    extras_require={
+            'test': ['pytest'],
+    },
     entry_points={
         'console_scripts': [
             'container_stats_publisher = cadvisor_monitor.container_stats_publisher:main',
