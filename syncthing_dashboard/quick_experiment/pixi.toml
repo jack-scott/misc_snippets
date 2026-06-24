@@ -1,0 +1,11 @@
+[workspace]
+name = "syncthing-fleet-dashboard"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.11"
+
+[tasks]
+serve = { cmd = "python -m http.server 8080", description = "Serve the dashboard at http://localhost:8080/dashboard.html" }

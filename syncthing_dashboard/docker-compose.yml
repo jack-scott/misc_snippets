@@ -1,0 +1,81 @@
+services:
+
+  # Central server — Syncthing that the dashboard backend will proxy at localhost:8384
+  server:
+    build:
+      context: .
+      dockerfile: docker/drone/Dockerfile
+    environment:
+      SYNCTHING_API_KEY: server-api-key-fleetserver01
+      ROLE: server
+      DRONE_NAME: fleet-server
+    volumes:
+      - server-config:/config
+      - server-data:/data
+    ports:
+      - "127.0.0.1:8384:8384"    # Syncthing API — localhost on host only (FastAPI backend)
+      - "127.0.0.1:22000:22000"  # Sync protocol — localhost only
+    networks:
+      - drone-net
+
+  drone1:
+    build:
+      context: .
+      dockerfile: docker/drone/Dockerfile
+    environment:
+      SYNCTHING_API_KEY: drone1-api-key-alpha001
+      ROLE: drone
+      DRONE_NAME: drone-alpha-1
+    volumes:
+      - drone1-config:/config
+      - drone1-data:/data
+    ports:
+      - "127.0.0.1:2201:22"  # SSH only — Syncthing API not exposed, access via tunnel
+    networks:
+      - drone-net
+
+  drone2:
+    build:
+      context: .
+      dockerfile: docker/drone/Dockerfile
+    environment:
+      SYNCTHING_API_KEY: drone2-api-key-beta002
+      ROLE: drone
+      DRONE_NAME: drone-beta-2
+    volumes:
+      - drone2-config:/config
+      - drone2-data:/data
+    ports:
+      - "127.0.0.1:2202:22"
+    networks:
+      - drone-net
+
+  drone3:
+    build:
+      context: .
+      dockerfile: docker/drone/Dockerfile
+    environment:
+      SYNCTHING_API_KEY: drone3-api-key-gamma003
+      ROLE: drone
+      DRONE_NAME: drone-gamma-3
+    volumes:
+      - drone3-config:/config
+      - drone3-data:/data
+    ports:
+      - "127.0.0.1:2203:22"
+    networks:
+      - drone-net
+
+networks:
+  drone-net:
+    driver: bridge
+
+volumes:
+  server-config:
+  server-data:
+  drone1-config:
+  drone1-data:
+  drone2-config:
+  drone2-data:
+  drone3-config:
+  drone3-data:

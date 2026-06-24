@@ -1,0 +1,16 @@
+# Node
+web/node_modules/
+web/dist/
+
+# Per-drone SSH keys (generated at runtime by the backend)
+keys/
+
+# Docker test keypair — contains a private key; re-generate with ssh-keygen if needed
+docker/keys/
+
+# Pixi environments
+.pixi/
+
+# Python
+__pycache__/
+*.pyc

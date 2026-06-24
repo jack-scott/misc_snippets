@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Syncthing Fleet Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #0f1117; color: #e2e8f0; font-family: system-ui, sans-serif; margin: 0; }
+    .progress-bar-track { background: #1e293b; border-radius: 4px; height: 6px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+    .progress-syncing { background: linear-gradient(90deg, #3b82f6, #60a5fa); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.7} }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .tooltip { position: relative; }
+    .tooltip:hover .tooltip-text { display: block; }
+    .tooltip-text { display: none; position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%);
+      background: #1e293b; color: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 11px;
+      white-space: nowrap; z-index: 100; border: 1px solid #334155; pointer-events: none; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'st-fleet-drones';
+
+function loadDrones() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch { return []; }
+}
+
+function saveDrones(drones) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(drones));
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+function formatBytes(bytes) {
+  if (bytes == null || isNaN(bytes)) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function formatUptime(seconds) {
+  if (!seconds) return '—';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function formatCompletion(pct) {
+  if (pct == null) return '—';
+  return `${Math.round(pct)}%`;
+}
+
+function truncateDeviceId(id) {
+  if (!id) return '—';
+  return id.slice(0, 7) + '…';
+}
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+async function apiFetch(drone, path, options = {}) {
+  const url = `http://${drone.host}/rest${path}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'X-API-Key': drone.apiKey,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function ToastContainer({ toasts, dismiss }) {
+  return (
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      {toasts.map(t => (
+        <div key={t.id}
+          className={`flex items-start gap-2 px-4 py-3 rounded-lg shadow-lg text-sm cursor-pointer
+            ${t.type === 'error' ? 'bg-red-900 border border-red-700' :
+              t.type === 'warn' ? 'bg-amber-900 border border-amber-700' :
+              'bg-slate-700 border border-slate-600'}`}
+          onClick={() => dismiss(t.id)}>
+          <span className="flex-1">{t.msg}</span>
+          <span className="text-slate-400 mt-0.5">✕</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function useToasts() {
+  const [toasts, setToasts] = useState([]);
+  const counter = useRef(0);
+
+  const push = useCallback((msg, type = 'info') => {
+    const id = ++counter.current;
+    setToasts(prev => [...prev, { id, msg, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 2500);
+  }, []);
+
+  const dismiss = useCallback(id => setToasts(prev => prev.filter(t => t.id !== id)), []);
+
+  return { toasts, push, dismiss };
+}
+
+// ─── Status dot ───────────────────────────────────────────────────────────────
+function Dot({ color }) {
+  const colors = { green: 'bg-green-500', amber: 'bg-amber-400', red: 'bg-red-500', grey: 'bg-slate-500' };
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full ${colors[color] || colors.grey} shrink-0`} />;
+}
+
+// ─── Pill ─────────────────────────────────────────────────────────────────────
+function Pill({ label, color }) {
+  const styles = {
+    green: 'bg-green-900/60 text-green-300 border-green-700',
+    blue: 'bg-blue-900/60 text-blue-300 border-blue-700',
+    amber: 'bg-amber-900/60 text-amber-300 border-amber-700',
+    red: 'bg-red-900/60 text-red-300 border-red-700',
+    grey: 'bg-slate-800 text-slate-400 border-slate-600',
+  };
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded border font-medium ${styles[color] || styles.grey}`}>
+      {label}
+    </span>
+  );
+}
+
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+function ProgressBar({ pct, syncing, paused }) {
+  const fill = paused ? '#334155' : syncing ? undefined : '#22c55e';
+  return (
+    <div className="progress-bar-track">
+      <div
+        className={syncing && !paused ? 'progress-bar-fill progress-syncing' : 'progress-bar-fill'}
+        style={{ width: `${Math.min(100, pct || 0)}%`, background: paused || syncing ? undefined : fill }}
+      />
+    </div>
+  );
+}
+
+// ─── Fleet overview ───────────────────────────────────────────────────────────
+async function fetchDroneSnapshot(drone) {
+  const [status, connections, config] = await Promise.all([
+    apiFetch(drone, '/system/status'),
+    apiFetch(drone, '/system/connections'),
+    apiFetch(drone, '/config'),
+  ]);
+
+  const folders = config.folders || [];
+  const folderStatuses = await Promise.all(
+    folders.map(f => apiFetch(drone, `/db/status?folder=${encodeURIComponent(f.id)}`).catch(() => null))
+  );
+
+  const connCount = Object.values(connections.connections || {})
+    .filter(c => c.connected && c.address !== 'dynamic').length;
+
+  return { status, connections, config, folderStatuses, connCount, error: null };
+}
+
+function DroneCard({ drone, onView }) {
+  const [snap, setSnap] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const intervalRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await fetchDroneSnapshot(drone);
+      setSnap(data);
+      setError(null);
+    } catch (e) {
+      setError(e.status === 401 ? 'Invalid API key' : 'Unreachable');
+    } finally {
+      setLoading(false);
+    }
+  }, [drone]);
+
+  useEffect(() => {
+    refresh();
+    intervalRef.current = setInterval(refresh, 30000);
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(intervalRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refresh]);
+
+  const statusColor = loading ? 'grey' : error ? 'red' : 'green';
+
+  return (
+    <div className={`bg-slate-800 border rounded-xl p-5 flex flex-col gap-3
+      ${error ? 'border-red-800 opacity-60' : 'border-slate-700'}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Dot color={statusColor} />
+          <span className="font-semibold text-slate-100">{drone.label}</span>
+        </div>
+        <span className="text-xs text-slate-500 font-mono">{drone.host}</span>
+      </div>
+
+      {loading && <p className="text-slate-500 text-sm">Connecting…</p>}
+
+      {error && (
+        <div className="flex items-center justify-between">
+          <span className="text-red-400 text-sm">{error}</span>
+          <button onClick={refresh}
+            className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 border border-slate-600">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {snap && !error && (
+        <>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+            <span>{snap.connCount} peer{snap.connCount !== 1 ? 's' : ''} connected</span>
+            <span>·</span>
+            <span>uptime {formatUptime(snap.status.uptime)}</span>
+          </div>
+
+          {snap.config.folders.length === 0 && (
+            <p className="text-slate-500 text-sm italic">No sync folders configured</p>
+          )}
+
+          <div className="flex flex-col gap-2">
+            {snap.config.folders.map((f, i) => {
+              const fs = snap.folderStatuses[i];
+              const state = fs?.state || 'unknown';
+              const pct = fs ? (fs.globalBytes > 0 ? (fs.inSyncBytes / fs.globalBytes) * 100 : 0) : 0;
+              const pillColor = f.paused ? 'grey' : state === 'idle' ? 'green' : state === 'syncing' ? 'blue' : state === 'scanning' ? 'amber' : state === 'error' ? 'red' : 'grey';
+              return (
+                <div key={f.id} className="flex items-center gap-2">
+                  <span className="text-slate-300 text-xs flex-1 truncate">{f.label || f.id}</span>
+                  <Pill label={f.paused ? 'paused' : state} color={pillColor} />
+                  {!f.paused && state === 'syncing' && (
+                    <span className="text-xs text-blue-400">{formatCompletion(pct)}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <button onClick={() => onView(drone.id)}
+        className="mt-auto w-full py-1.5 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-medium border border-indigo-600">
+        View
+      </button>
+    </div>
+  );
+}
+
+function FleetOverview({ drones, navigate }) {
+  if (drones.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 gap-4 text-slate-500">
+        <p className="text-lg">No drones configured</p>
+        <button onClick={() => navigate('settings')}
+          className="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-medium">
+          Add a drone
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+      {drones.map(d => (
+        <DroneCard key={d.id} drone={d} onView={id => navigate('detail', id)} />
+      ))}
+    </div>
+  );
+}
+
+// ─── Drone detail ─────────────────────────────────────────────────────────────
+function InstanceInfo({ status, version }) {
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-wrap gap-6">
+      <div>
+        <p className="text-xs text-slate-500 mb-1">Device ID</p>
+        <div className="tooltip">
+          <span className="font-mono text-sm text-slate-300">{truncateDeviceId(status.myID)}</span>
+          <span className="tooltip-text">{status.myID}</span>
+        </div>
+      </div>
+      <div>
+        <p className="text-xs text-slate-500 mb-1">Uptime</p>
+        <span className="text-sm text-slate-300">{formatUptime(status.uptime)}</span>
+      </div>
+      <div>
+        <p className="text-xs text-slate-500 mb-1">Memory</p>
+        <span className="text-sm text-slate-300">{formatBytes(status.alloc)}</span>
+      </div>
+      {version && (
+        <div>
+          <p className="text-xs text-slate-500 mb-1">Version</p>
+          <span className="text-sm text-slate-300">{version.version}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PeersSection({ config, connections, myID, completionMap }) {
+  const devices = (config.devices || []).filter(d => d.deviceID !== myID);
+  if (devices.length === 0) return <p className="text-slate-500 italic text-sm">No peers configured</p>;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {devices.map(dev => {
+        const conn = (connections.connections || {})[dev.deviceID] || {};
+        const dotColor = conn.connected ? 'green' : conn.paused ? 'amber' : 'grey';
+        const completion = completionMap?.[dev.deviceID];
+        return (
+          <div key={dev.deviceID} className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-wrap gap-4 items-start">
+            <div className="flex items-center gap-2 min-w-[180px]">
+              <Dot color={dotColor} />
+              <div>
+                <p className="text-sm text-slate-200 font-medium">
+                  {dev.name || truncateDeviceId(dev.deviceID)}
+                </p>
+                {conn.type && <p className="text-xs text-slate-500">{conn.type}</p>}
+              </div>
+            </div>
+            {conn.connected && (
+              <div className="flex gap-6 text-xs text-slate-400">
+                <span>↓ {formatBytes(conn.inBytesTotal)}</span>
+                <span>↑ {formatBytes(conn.outBytesTotal)}</span>
+              </div>
+            )}
+            {completion != null && (
+              <div className="text-xs text-slate-400">
+                Sync: {formatCompletion(completion)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FolderCard({ drone, folder, status, localCompletion, peerCompletions, onToast }) {
+  const [acting, setActing] = useState(false);
+
+  const state = status?.state || 'unknown';
+  const syncing = state === 'syncing';
+  const paused = folder.paused;
+
+  // sendonly: local is always 100% — what matters is how much peers still need.
+  // Use the worst-case peer (min completion / max needBytes).
+  // receiveonly / sendreceive: use local completion (how much local still needs to receive).
+  let pct, needBytes;
+  if (folder.type === 'sendonly' && peerCompletions && peerCompletions.length > 0) {
+    const worst = peerCompletions.reduce((a, b) => (b.completion < a.completion ? b : a));
+    pct = worst.completion;
+    needBytes = worst.needBytes ?? 0;
+  } else {
+    pct = localCompletion?.completion ?? (status?.globalBytes > 0 ? (status.inSyncBytes / status.globalBytes) * 100 : 0);
+    needBytes = localCompletion?.needBytes ?? Math.max(0, (status?.globalBytes || 0) - (status?.inSyncBytes || 0));
+  }
+
+  const pillColor = paused ? 'grey' : state === 'idle' ? 'green' : syncing ? 'blue' : state === 'scanning' ? 'amber' : state === 'error' ? 'red' : 'grey';
+
+  const typeLabel = { sendonly: 'send only', receiveonly: 'receive only', sendreceive: 'send & receive' };
+
+  async function togglePause() {
+    setActing(true);
+    try {
+      await apiFetch(drone, `/config/folders/${encodeURIComponent(folder.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ paused: !paused }),
+      });
+      onToast(paused ? `"${folder.label || folder.id}" resumed` : `"${folder.label || folder.id}" paused`);
+    } catch (e) {
+      onToast(`Pause/resume failed: ${e.message}`, 'error');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function scan() {
+    setActing(true);
+    try {
+      await apiFetch(drone, `/db/scan?folder=${encodeURIComponent(folder.id)}`, { method: 'POST' });
+      onToast(`Scan triggered for "${folder.label || folder.id}"`);
+    } catch (e) {
+      onToast(`Scan failed: ${e.message}`, 'error');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-slate-200 font-medium">{folder.label || folder.id}</p>
+          <p className="font-mono text-xs text-slate-500">{folder.id}</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Pill label={typeLabel[folder.type] || folder.type} color="grey" />
+          <Pill label={paused ? 'paused' : state} color={pillColor} />
+        </div>
+      </div>
+
+      <p className="font-mono text-xs text-slate-500 truncate" title={folder.path}>{folder.path}</p>
+
+      <div className={paused ? 'opacity-40' : ''}>
+        <ProgressBar pct={pct} syncing={syncing} paused={paused} />
+      </div>
+
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <span>
+          {needBytes > 0 ? `${formatCompletion(pct)} synced · ${formatBytes(needBytes)} remaining` : `${formatCompletion(pct)} synced`}
+        </span>
+        <span>{status?.localFiles ?? '—'} files</span>
+      </div>
+
+      {status?.pullErrors > 0 && (
+        <p className="text-xs text-red-400">{status.pullErrors} pull error{status.pullErrors !== 1 ? 's' : ''}</p>
+      )}
+
+      <div className="flex gap-2 mt-1">
+        <button onClick={togglePause} disabled={acting}
+          className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 disabled:opacity-50">
+          {paused ? 'Resume' : 'Pause'}
+        </button>
+        <button onClick={scan} disabled={acting || paused}
+          className="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 disabled:opacity-50">
+          Scan
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BrowseSection({ drone, droneDeviceId, allDrones, config, onToast, onFoldersChanged }) {
+  const [path, setPath] = useState('~/Documents');
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState(null); // { dir, folderId, label, localDroneId, localPath }
+  const [submitting, setSubmitting] = useState(false);
+
+  const configuredPaths = new Set((config.folders || []).map(f => f.path));
+
+  async function browse() {
+    setLoading(true);
+    try {
+      const data = await apiFetch(drone, `/system/browse?current=${encodeURIComponent(path)}`);
+      setResults(Array.isArray(data) ? data : []);
+    } catch (e) {
+      onToast(`Browse failed: ${e.message}`, 'error');
+      setResults([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openForm(dir) {
+    const seg = dir.split('/').filter(Boolean).pop() || 'folder';
+    const rand = Math.random().toString(36).slice(2, 6);
+    const folderId = `st-${seg}-${rand}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 32);
+    setPending({ dir, folderId, label: seg, localDroneId: allDrones[0]?.id || '', localPath: '' });
+  }
+
+  async function confirmAdd() {
+    const { dir, folderId, label, localDroneId, localPath } = pending;
+    const localDrone = allDrones.find(d => d.id === localDroneId);
+    if (!localDrone || !localPath.trim()) return;
+
+    setSubmitting(true);
+    try {
+      const localStatus = await apiFetch(localDrone, '/system/status');
+      const localDeviceId = localStatus.myID;
+
+      await apiFetch(drone, '/config/folders', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: folderId, label, path: dir,
+          type: 'sendonly', paused: true, rescanIntervalS: 3600,
+          devices: [{ deviceID: localDeviceId, introducedBy: '', encryptionPassword: '' }],
+        }),
+      });
+
+      await apiFetch(localDrone, '/config/folders', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: folderId, label, path: localPath.trim(),
+          type: 'receiveonly', paused: true, rescanIntervalS: 3600,
+          devices: [{ deviceID: droneDeviceId, introducedBy: '', encryptionPassword: '' }],
+        }),
+      });
+
+      onToast(`"${label}" configured: ${drone.label} → ${localDrone.label} (resume both to start)`);
+      setPending(null);
+      onFoldersChanged();
+      browse();
+    } catch (e) {
+      onToast(`Sync setup failed: ${e.message}`, 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex gap-2">
+        <input
+          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+          value={path}
+          onChange={e => setPath(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && browse()}
+          placeholder="~/Documents"
+        />
+        <button onClick={browse} disabled={loading}
+          className="px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-medium border border-indigo-600 disabled:opacity-50">
+          {loading ? '…' : 'Browse'}
+        </button>
+      </div>
+
+      {allDrones.length === 0 && (
+        <p className="text-amber-400/80 text-xs">
+          Add your local machine to the fleet in Settings before syncing folders to it.
+        </p>
+      )}
+
+      {results !== null && (
+        results.length === 0
+          ? <p className="text-slate-500 italic text-sm">No subdirectories found</p>
+          : (
+            <div className="flex flex-col gap-1.5">
+              {results.map(dir => {
+                const isAdded = configuredPaths.has(dir);
+                const isOpen = pending?.dir === dir;
+                return (
+                  <div key={dir} className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+                    <div className="flex items-center gap-3 px-3 py-2">
+                      <span className="text-slate-400 shrink-0">📁</span>
+                      <span className="font-mono text-xs text-slate-300 flex-1 truncate" title={dir}>{dir}</span>
+                      {isAdded
+                        ? <Pill label="added" color="green" />
+                        : isOpen
+                          ? <button onClick={() => setPending(null)}
+                              className="text-xs text-slate-500 hover:text-slate-300 shrink-0">Cancel</button>
+                          : <button onClick={() => openForm(dir)} disabled={allDrones.length === 0}
+                              className="text-xs px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-600 disabled:opacity-40 shrink-0">
+                              Add
+                            </button>
+                      }
+                    </div>
+
+                    {isOpen && (
+                      <div className="border-t border-slate-700 bg-slate-900/60 px-4 py-3 flex flex-col gap-3">
+                        <div className="flex flex-wrap gap-3">
+                          <div className="flex-1 min-w-[160px]">
+                            <label className="text-xs text-slate-500 mb-1 block">Folder ID (on both instances)</label>
+                            <span className="font-mono text-xs text-slate-400">{pending.folderId}</span>
+                          </div>
+                          <div className="flex-1 min-w-[160px]">
+                            <label className="text-xs text-slate-500 mb-1 block">Label</label>
+                            <input
+                              className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                              value={pending.label}
+                              onChange={e => setPending(p => ({ ...p, label: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                          <div className="flex-1 min-w-[160px]">
+                            <label className="text-xs text-slate-500 mb-1 block">Sync to instance</label>
+                            <select
+                              className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                              value={pending.localDroneId}
+                              onChange={e => setPending(p => ({ ...p, localDroneId: e.target.value }))}>
+                              {allDrones.map(d => <option key={d.id} value={d.id}>{d.label} ({d.host})</option>)}
+                            </select>
+                          </div>
+                          <div className="flex-1 min-w-[200px]">
+                            <label className="text-xs text-slate-500 mb-1 block">Local path on that instance</label>
+                            <input
+                              className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500"
+                              placeholder="~/Documents/drone-data"
+                              value={pending.localPath}
+                              onChange={e => setPending(p => ({ ...p, localPath: e.target.value }))}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <button onClick={confirmAdd}
+                            disabled={submitting || !pending.localPath.trim() || !pending.localDroneId}
+                            className="text-xs px-4 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 text-white border border-indigo-600 disabled:opacity-50">
+                            {submitting ? 'Setting up…' : 'Set up sync'}
+                          </button>
+                          <p className="text-xs text-slate-500">
+                            Drone: send-only · Local: receive-only · Both start paused
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )
+      )}
+    </div>
+  );
+}
+
+function DroneDetail({ drone, drones, navigate, pushToast }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [acting, setActing] = useState(false);
+  const intervalRef = useRef(null);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [status, connections, config, version] = await Promise.all([
+        apiFetch(drone, '/system/status'),
+        apiFetch(drone, '/system/connections'),
+        apiFetch(drone, '/config'),
+        apiFetch(drone, '/system/version').catch(() => null),
+      ]);
+
+      const folders = config.folders || [];
+      const [folderStatuses, folderLocalCompletions] = await Promise.all([
+        Promise.all(folders.map(f => apiFetch(drone, `/db/status?folder=${encodeURIComponent(f.id)}`).catch(() => null))),
+        Promise.all(folders.map(f => apiFetch(drone, `/db/completion?folder=${encodeURIComponent(f.id)}`).catch(() => null))),
+      ]);
+
+      // Per-folder array of { deviceID, completion, needBytes, globalBytes }.
+      // Annotating with deviceID lets us reuse these results for the peers section
+      // and for accurate sendonly progress (local completion is always 100% for sendonly).
+      const folderPeerCompletions = await Promise.all(
+        folders.map(async f => {
+          const peerIds = (f.devices || []).map(d => d.deviceID).filter(id => id !== status.myID);
+          const results = await Promise.all(
+            peerIds.map(async id => {
+              const c = await apiFetch(drone, `/db/completion?folder=${encodeURIComponent(f.id)}&device=${encodeURIComponent(id)}`).catch(() => null);
+              return c ? { ...c, deviceID: id } : null;
+            })
+          );
+          return results.filter(Boolean);
+        })
+      );
+
+      // Average each peer's completion across all folders it shares (for the peers section).
+      const completionMap = {};
+      (config.devices || []).filter(d => d.deviceID !== status.myID).forEach(dev => {
+        const vals = folderPeerCompletions.flatMap(perFolder =>
+          perFolder.filter(c => c.deviceID === dev.deviceID).map(c => c.completion)
+        );
+        if (vals.length) completionMap[dev.deviceID] = vals.reduce((a, b) => a + b, 0) / vals.length;
+      });
+
+      setData({ status, connections, config, version, folderStatuses, folderLocalCompletions, folderPeerCompletions, completionMap });
+      setError(null);
+    } catch (e) {
+      setError(e.status === 401 ? 'Invalid API key' : 'Drone unreachable');
+    }
+  }, [drone]);
+
+  useEffect(() => {
+    fetchAll();
+    intervalRef.current = setInterval(fetchAll, 8000);
+    const onVisible = () => { if (document.visibilityState === 'visible') fetchAll(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(intervalRef.current);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchAll]);
+
+  async function pauseAll() {
+    setActing(true);
+    try {
+      await apiFetch(drone, '/system/pause', { method: 'POST' });
+      pushToast('All sync paused');
+      fetchAll();
+    } catch (e) {
+      pushToast(`Pause all failed: ${e.message}`, 'error');
+    } finally { setActing(false); }
+  }
+
+  async function scanAll() {
+    if (!data) return;
+    setActing(true);
+    try {
+      await Promise.all(
+        data.config.folders.map(f =>
+          apiFetch(drone, `/db/scan?folder=${encodeURIComponent(f.id)}`, { method: 'POST' }).catch(() => null)
+        )
+      );
+      pushToast('Scan triggered for all folders');
+    } catch (e) {
+      pushToast(`Scan all failed: ${e.message}`, 'error');
+    } finally { setActing(false); }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate('fleet')}
+            className="text-slate-400 hover:text-slate-200 text-sm px-3 py-1.5 rounded border border-slate-700 hover:border-slate-600">
+            ← Fleet
+          </button>
+          <h2 className="text-xl font-semibold text-slate-100">{drone.label}</h2>
+          <span className="text-slate-500 text-sm font-mono">{drone.host}</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={pauseAll} disabled={acting || !data}
+            className="text-sm px-4 py-1.5 rounded-lg bg-amber-800 hover:bg-amber-700 border border-amber-700 text-amber-100 disabled:opacity-50">
+            Pause all
+          </button>
+          <button onClick={scanAll} disabled={acting || !data}
+            className="text-sm px-4 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 disabled:opacity-50">
+            Scan all
+          </button>
+        </div>
+      </div>
+
+      {!data && !error && <p className="text-slate-500">Loading…</p>}
+      {error && <p className="text-red-400">{error}</p>}
+
+      {data && (
+        <>
+          <section>
+            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Instance</h3>
+            <InstanceInfo status={data.status} version={data.version} />
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Peers</h3>
+            <PeersSection
+              config={data.config}
+              connections={data.connections}
+              myID={data.status.myID}
+              completionMap={data.completionMap}
+            />
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Sync folders</h3>
+            {data.config.folders.length === 0
+              ? <p className="text-slate-500 italic text-sm">No sync folders configured</p>
+              : (
+                <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))' }}>
+                  {data.config.folders.map((f, i) => (
+                    <FolderCard
+                      key={f.id}
+                      drone={drone}
+                      folder={f}
+                      status={data.folderStatuses[i]}
+                      localCompletion={data.folderLocalCompletions[i]}
+                      peerCompletions={data.folderPeerCompletions[i]}
+                      onToast={pushToast}
+                    />
+                  ))}
+                </div>
+              )
+            }
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Browse filesystem</h3>
+            <BrowseSection
+              drone={drone}
+              droneDeviceId={data.status.myID}
+              allDrones={drones.filter(d => d.id !== drone.id)}
+              config={data.config}
+              onToast={pushToast}
+              onFoldersChanged={fetchAll}
+            />
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+function Settings({ drones, setDrones, navigate, pushToast }) {
+  const [form, setForm] = useState({ label: '', host: '', apiKey: '' });
+  const [editId, setEditId] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  function startEdit(drone) {
+    setEditId(drone.id);
+    setForm({ label: drone.label, host: drone.host, apiKey: drone.apiKey });
+    setTestResult(null);
+  }
+
+  function cancelEdit() {
+    setEditId(null);
+    setForm({ label: '', host: '', apiKey: '' });
+    setTestResult(null);
+  }
+
+  function removeDrone(id) {
+    const updated = drones.filter(d => d.id !== id);
+    setDrones(updated);
+    saveDrones(updated);
+  }
+
+  async function testConnection() {
+    if (!form.host || !form.apiKey) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      await apiFetch({ host: form.host, apiKey: form.apiKey }, '/system/ping');
+      setTestResult('ok');
+    } catch (e) {
+      setTestResult(e.status === 401 ? 'bad-key' : 'unreachable');
+    } finally { setTesting(false); }
+  }
+
+  function save() {
+    if (!form.label || !form.host || !form.apiKey) return;
+    let updated;
+    if (editId) {
+      updated = drones.map(d => d.id === editId ? { ...d, ...form } : d);
+    } else {
+      const id = `drone-${Date.now()}`;
+      updated = [...drones, { id, ...form }];
+    }
+    setDrones(updated);
+    saveDrones(updated);
+    cancelEdit();
+    pushToast(editId ? 'Drone updated' : 'Drone added');
+    if (!editId) navigate('fleet');
+  }
+
+  return (
+    <div className="flex flex-col gap-6 max-w-2xl">
+      <div className="flex items-center gap-3">
+        <button onClick={() => navigate('fleet')}
+          className="text-slate-400 hover:text-slate-200 text-sm px-3 py-1.5 rounded border border-slate-700 hover:border-slate-600">
+          ← Fleet
+        </button>
+        <h2 className="text-xl font-semibold text-slate-100">Settings</h2>
+      </div>
+
+      {drones.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {drones.map(d => (
+            <div key={d.id} className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-slate-200 font-medium">{d.label}</p>
+                <p className="text-slate-500 text-xs font-mono">{d.host} · {'•'.repeat(Math.min(d.apiKey.length, 8))}</p>
+              </div>
+              <button onClick={() => startEdit(d)}
+                className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300">
+                Edit
+              </button>
+              <button onClick={() => removeDrone(d.id)}
+                className="text-xs px-3 py-1 rounded bg-red-900/60 hover:bg-red-900 border border-red-800 text-red-300">
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
+        <h3 className="text-slate-200 font-semibold">{editId ? 'Edit drone' : 'Add drone'}</h3>
+
+        {[
+          { key: 'label', label: 'Label', type: 'text', placeholder: 'Drone 01' },
+          { key: 'host', label: 'Host', type: 'text', placeholder: '192.168.1.101:8384' },
+          { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '••••••••' },
+        ].map(f => (
+          <div key={f.key}>
+            <label className="text-xs text-slate-400 mb-1 block">{f.label}</label>
+            <input
+              type={f.type}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
+              placeholder={f.placeholder}
+              value={form[f.key]}
+              onChange={e => { setForm(prev => ({ ...prev, [f.key]: e.target.value })); setTestResult(null); }}
+            />
+          </div>
+        ))}
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={testConnection} disabled={testing || !form.host || !form.apiKey}
+            className="text-sm px-4 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 disabled:opacity-50">
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          {testResult === 'ok' && <span className="text-green-400 text-sm">Connected</span>}
+          {testResult === 'bad-key' && <span className="text-red-400 text-sm">Invalid API key</span>}
+          {testResult === 'unreachable' && <span className="text-red-400 text-sm">Unreachable</span>}
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={save} disabled={!form.label || !form.host || !form.apiKey}
+            className="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-medium text-sm border border-indigo-600 disabled:opacity-50">
+            {editId ? 'Update' : 'Add drone'}
+          </button>
+          {editId && (
+            <button onClick={cancelEdit}
+              className="px-5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 text-sm">
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App shell ────────────────────────────────────────────────────────────────
+function App() {
+  const [drones, setDrones] = useState(loadDrones);
+  const [page, setPage] = useState('fleet'); // fleet | detail | settings
+  const [activeDroneId, setActiveDroneId] = useState(null);
+  const { toasts, push: pushToast, dismiss } = useToasts();
+
+  function navigate(p, droneId) {
+    setPage(p);
+    if (droneId) setActiveDroneId(droneId);
+  }
+
+  const activeDrone = drones.find(d => d.id === activeDroneId);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200">
+      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-40">
+        <button onClick={() => navigate('fleet')}
+          className="text-slate-100 font-bold text-lg tracking-tight hover:text-white">
+          Syncthing Fleet
+        </button>
+        <button onClick={() => navigate('settings')}
+          className="text-sm px-4 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600 text-slate-400 hover:text-slate-200">
+          Settings
+        </button>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+        {page === 'fleet' && (
+          <FleetOverview drones={drones} navigate={navigate} />
+        )}
+        {page === 'detail' && activeDrone && (
+          <DroneDetail drone={activeDrone} drones={drones} navigate={navigate} pushToast={pushToast} />
+        )}
+        {page === 'settings' && (
+          <Settings drones={drones} setDrones={setDrones} navigate={navigate} pushToast={pushToast} />
+        )}
+      </main>
+
+      <ToastContainer toasts={toasts} dismiss={dismiss} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
