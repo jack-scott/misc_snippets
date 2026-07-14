@@ -11,3 +11,9 @@ services:
       target: dev
     image: cadvisor_dev:latest
 
+
+  test:
+    build:
+      context: .
+      target: test
+    image: cadvisor_test:latest

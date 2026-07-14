@@ -1,17 +1,18 @@
-# Radio Infrastructure - DO NOT MODIFY
+# Radio node — used for every drone and the base station (DRONE_ID=0)
 #
-# This provides the MANET radio interface for your drone.
-# Your drone software goes in compose.app.yml
-# Configure radio settings in ../config.yaml
+# Never run this file directly. Use launch.py which sets DRONE_ID and DRONE_COUNT,
+# then overlays your experiment compose file on top.
 #
-# App containers use network_mode: "service:radio" to share this
-# container's network namespace. They see the same interfaces and
-# can bind directly to the MANET IP (172.31.0.1X).
+# Example (handled by launch.py):
+#   DRONE_ID=1 DRONE_COUNT=3 docker compose \
+#     -f radio/compose.yml \
+#     -f experiments/my_algo/compose.yml \
+#     -p drone1 up -d
 
 services:
   radio:
     build:
-      context: ../radio
+      context: .
     container_name: drone${DRONE_ID}_radio
     hostname: drone${DRONE_ID}_radio
     stop_grace_period: 2s
@@ -32,7 +33,6 @@ networks:
   manet:
     name: manet_mesh
     external: true
-
   control:
     name: manet_control
     external: true

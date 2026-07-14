@@ -20,9 +20,16 @@ RUN pixi shell-hook -s bash > /workspace/activate.sh && \
 
 COPY src/cadvisor_monitor /workspace/process_monitor/src/cadvisor_monitor
 RUN mkdir -p /workspace/ros2_ws/src/
-#setup folders
+#setup folders so when we mount volumes here later they have the correct permissions
 RUN cd /workspace/ros2_ws/ && pixi run colcon build
 RUN ln -s /workspace/process_monitor/src/cadvisor_monitor /workspace/ros2_ws/src/
+
+
+FROM source_build AS test
+WORKDIR /workspace/ros2_ws
+RUN pixi run colcon build
+ENTRYPOINT ["/workspace/entrypoint.sh"]
+CMD ["colcon", "test"]
 
 FROM source AS prod_build
 RUN --mount=type=cache,target=~/.cache/rattler pixi install -e prod

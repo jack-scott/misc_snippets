@@ -1,23 +1,12 @@
-# MANET Chaos Simulator - Control Plane
+# Control plane — telemetry backhaul and recording
 #
-# Usage: ./launch.py 3
+# Bring this up before drone stacks. It creates the manet_control network
+# that radios and the UI both attach to.
+#
+# Usage:
+#   DRONE_COUNT=3 docker compose -f control_plane/compose.yml -p manet_control up -d
 
 services:
-  ui:
-    build:
-      context: ./ui
-    container_name: manet_ui
-    stop_grace_period: 2s
-    ports:
-      - "8080:8080"
-    environment:
-      - DRONE_COUNT=${DRONE_COUNT:-3}
-    volumes:
-      - manet_metrics:/metrics:ro
-      - ./config.yaml:/config/config.yaml:ro
-    networks:
-      - control
-
   foxglove_logger:
     build:
       context: ./foxglove_logger
@@ -37,10 +26,11 @@ services:
 
 networks:
   control:
-    name: manet_control
+    name: manet_control   # created here; referenced as external by radio and ui
 
 volumes:
   manet_metrics:
     name: manet_metrics
+    external: true        # created by launch.py before anything else starts
   manet_recordings:
     name: manet_recordings

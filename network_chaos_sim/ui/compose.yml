@@ -1,0 +1,33 @@
+# Web UI — visualisation and runtime link controls
+#
+# Optional: bring up separately from the control plane.
+# Requires control_plane to be running first (manet_control network must exist).
+#
+# Usage:
+#   DRONE_COUNT=3 docker compose -f ui/compose.yml -p manet_ui up -d
+
+services:
+  ui:
+    build:
+      context: .
+    container_name: manet_ui
+    stop_grace_period: 2s
+    ports:
+      - "8080:8080"
+    environment:
+      - DRONE_COUNT=${DRONE_COUNT:-3}
+    volumes:
+      - manet_metrics:/metrics:ro
+      - ../config.yaml:/config/config.yaml:ro
+    networks:
+      - control
+
+networks:
+  control:
+    name: manet_control
+    external: true
+
+volumes:
+  manet_metrics:
+    name: manet_metrics
+    external: true

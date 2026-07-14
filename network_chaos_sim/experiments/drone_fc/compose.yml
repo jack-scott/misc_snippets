@@ -1,0 +1,30 @@
+# Experiment: flight controller simulator
+#
+# Overlay on top of radio/compose.yml. The flight_controller service
+# joins the radio's network namespace so it shares the MANET IP and
+# all three traffic paths (inter-drone, localhost, backhaul).
+#
+# Usage (via launch.py):
+#   ./launch.py up 3 experiments/drone_fc/compose.yml
+#
+# Manually (for one node):
+#   DRONE_ID=1 DRONE_COUNT=3 docker compose \
+#     -f radio/compose.yml \
+#     -f experiments/drone_fc/compose.yml \
+#     -p drone1 up -d
+
+services:
+  flight_controller:
+    build:
+      context: ./fc
+    container_name: drone${DRONE_ID}_fc
+    stop_grace_period: 2s
+    network_mode: "service:radio"
+    environment:
+      - DRONE_ID=${DRONE_ID}
+      - DRONE_COUNT=${DRONE_COUNT}
+      - FOXGLOVE_LOGGER_URL=http://foxglove_logger:9090
+    volumes:
+      - ../../config.yaml:/config/config.yaml:ro
+    depends_on:
+      - radio
