@@ -22,6 +22,9 @@ colcon-common-extensions = "*"
 [feature.runtime.dependencies]
 ros-humble-ros2run = "*"
 
+[feature.ci.dependencies]
+curl = "*"
+
 [feature.deploy.dependencies]
 # ---- Comment out either the local or remote to switch between trying the different sources ----
 # DEVELOPMENT: Use local source for active changes
@@ -50,6 +53,39 @@ publish = """
     pixi upload prefix --channel jacks-channel --api-key $PREFIX_AUTH *.conda
 """
 
+[feature.ci.tasks]
+# Downloads pinned goss/dgoss binaries into ci/bin/ (checksum-verified)
+install-goss = "bash tools/install_goss.sh"
+
+# CI smoketest: builds nothing itself — run `docker build --target prod -t cadvisor_prod:latest .`
+# first. Boots the prod image, waits for the node process to come up, then
+# runs the goss checks in ci/goss/goss.yaml against the live container.
+smoketest = { cmd = """
+    GOSS_FILES_PATH=ci/goss \
+    GOSS_SLEEP=2 \
+    GOSS_WAIT_OPTS='-r 30s -s 1s' \
+    GOSS_OPTS='--format documentation' \
+    PATH=$PWD/ci/bin:$PATH \
+    dgoss run --rm \
+      -e ROS_LOCALHOST_ONLY=1 \
+      cadvisor_prod:latest \
+      ros2 run cadvisor_monitor container_stats_publisher --ros-args -p cadvisor_url:=http://localhost:8080
+""", depends-on = ["install-goss"] }
+
+# Compose-based smoketest: brings up the full stack from compose.yaml
+# (docker-compose.yaml symlinks to it) — cadvisor plus the cadvisor_monitor
+# node depending on it — and runs the same goss checks against the node
+# once it's live, with the node actually reaching a real cadvisor.
+smoketest-compose = { cmd = """
+    GOSS_FILES_PATH=ci/goss \
+    GOSS_SLEEP=5 \
+    GOSS_WAIT_OPTS='-r 30s -s 1s' \
+    GOSS_OPTS='--format documentation' \
+    PATH=$PWD/ci/bin:$PATH \
+    dcgoss run cadvisor_monitor
+""", depends-on = ["install-goss"] }
+
 [environments]
 default ={ features = ["test", "build", "runtime", "development"], solve-group = "main"}
 prod = {features = ["deploy", "runtime"], solve-group = "main"}
+ci = { features = ["ci"], solve-group = "main"}

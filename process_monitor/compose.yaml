@@ -1,7 +1,6 @@
 services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
-    container_name: cadvisor
     restart: unless-stopped
     privileged: true
     ports:
@@ -12,3 +11,14 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+
+  cadvisor_monitor:
+    build:
+      context: .
+      target: prod
+    image: cadvisor_prod:prod
+    depends_on:
+      - cadvisor
+    environment:
+      - ROS_LOCALHOST_ONLY=1
+    command: [ros2, run, cadvisor_monitor, container_stats_publisher, --ros-args, -p, cadvisor_url:=http://cadvisor:8080]

@@ -18,6 +18,9 @@ build/
 install/
 log/
 
+# CI (goss/dgoss binaries fetched by tools/install_goss.sh)
+ci/bin/
+
 # IDE
 .vscode/
 .idea/
