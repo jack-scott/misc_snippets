@@ -54,7 +54,8 @@ class ContainerStatsPublisher(Node):
 
         # Track window timing
         self.last_publish_time = self.get_clock().now()
-
+        # e = "a"
+        # r = e/2
         self.get_logger().info(f'Publishing container stats at {publish_rate} Hz')
 
     def _make_time_msg(self, ros_time: Time) -> TimeMsg:

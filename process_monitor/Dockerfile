@@ -38,10 +38,11 @@ FROM ubuntu:24.04 AS prod
 
 WORKDIR /workspace
 # Pixi env (contains colcon, ROS, pytest, etc.) — no pixi binary
-COPY --from=prod_build /workspace/.pixi/envs/prod /workspace/.pixi/envs/prod
-# Built ROS workspace (src + install + build dirs for colcon test)
-COPY --from=prod_build --chmod=0755 /workspace/entrypoint.sh /workspace/entrypoint.sh
-RUN chown -R ubuntu:ubuntu /workspace
+# --chown here (not a separate RUN chown -R) avoids overlay2 copy-up on every
+# file in this ~32k-file ROS conda env, which was taking minutes
+COPY --from=prod_build --chown=ubuntu:ubuntu /workspace/.pixi/envs/prod /workspace/.pixi/envs/prod
+COPY --from=prod_build --chown=ubuntu:ubuntu /workspace/activate.sh /workspace/activate.sh
+COPY --from=prod_build --chown=ubuntu:ubuntu --chmod=0755 /workspace/entrypoint.sh /workspace/entrypoint.sh
 
 USER ubuntu
 ENTRYPOINT ["/workspace/entrypoint.sh"]
@@ -51,12 +52,13 @@ FROM ubuntu:24.04 AS dev
 
 WORKDIR /workspace
 # Pixi env (contains colcon, ROS, pytest, etc.) — no pixi binary
-COPY --from=source_build /workspace/.pixi/envs/default /workspace/.pixi/envs/default
-COPY --from=source_build /workspace/ros2_ws /workspace/ros2_ws
-COPY --from=source_build /workspace/process_monitor /workspace/process_monitor
-COPY --from=source_build /workspace/activate.sh /workspace/activate.sh
-COPY --from=source_build --chmod=0755 /workspace/entrypoint.sh /workspace/entrypoint.sh
-RUN chown -R ubuntu:ubuntu /workspace
+# --chown here (not a separate RUN chown -R) avoids overlay2 copy-up on every
+# file in this large ROS conda env, which was taking minutes
+COPY --from=source_build --chown=ubuntu:ubuntu /workspace/.pixi/envs/default /workspace/.pixi/envs/default
+COPY --from=source_build --chown=ubuntu:ubuntu /workspace/ros2_ws /workspace/ros2_ws
+COPY --from=source_build --chown=ubuntu:ubuntu /workspace/process_monitor /workspace/process_monitor
+COPY --from=source_build --chown=ubuntu:ubuntu /workspace/activate.sh /workspace/activate.sh
+COPY --from=source_build --chown=ubuntu:ubuntu --chmod=0755 /workspace/entrypoint.sh /workspace/entrypoint.sh
 # Source activate.sh for exec'd shells (docker exec bash, VS Code terminal, etc.)
 RUN echo '. /workspace/activate.sh' >> /home/ubuntu/.bashrc
 

@@ -1,0 +1,17 @@
+port:
+    udp:7400:
+        listening: true
+        ip:
+            - 239.255.0.1
+            - 127.0.0.1
+    udp:7410:
+        listening: true
+        ip:
+            - 127.0.0.1
+    udp:7411:
+        listening: true
+        ip:
+            - 127.0.0.1
+process:
+    container_stats:
+        running: true
