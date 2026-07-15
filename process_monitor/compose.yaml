@@ -1,7 +1,6 @@
 services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
-    restart: unless-stopped
     privileged: true
     ports:
       - "${CADVISOR_PORT:-8080}:8080"
