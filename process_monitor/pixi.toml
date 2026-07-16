@@ -53,13 +53,12 @@ publish = """
     pixi build && \
     pixi upload prefix --channel jacks-channel --api-key $PREFIX_AUTH *.conda
 """
-[feature.ci.activation]
-env = { GOSS_FILES_PATH = "goss/cadvisor_monitor",
-        COMPOSE_FILE="compose.yaml",
-        GOSS_SLEEP="5", 
-        GOSS_WAIT_OPTS='-r 30s -s 1s', 
-        GOSS_OPTS='--format documentation' 
-        }
+[feature.ci.activation.env]
+GOSS_FILES_PATH = "goss/cadvisor_monitor"
+COMPOSE_FILE = "compose.yaml"
+GOSS_SLEEP = "5"
+GOSS_WAIT_OPTS = '-r 30s -s 1s'
+GOSS_OPTS = '--format documentation'
 [feature.ci.tasks]
 # Compose-based smoketest: brings up the full stack from compose.yaml
 # (docker-compose.yaml symlinks to it) — cadvisor plus the cadvisor_monitor

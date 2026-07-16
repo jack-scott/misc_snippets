@@ -1,5 +1,7 @@
 import pytest
 import rclpy
+from diagnostic_msgs.msg import DiagnosticStatus
+from diagnostic_updater import DiagnosticStatusWrapper
 from rclpy.time import Time
 
 from cadvisor_monitor.cadvisor import ContainerSummary
@@ -153,3 +155,47 @@ def test_memory_1h_max_at_index_4(node, window):
     msg = node._create_memory_message(make_summary(memory_1h_max=650000000), *window)
     assert msg.statistics[4].data_type == STATISTICS_DATA_TYPE_MAXIMUM
     assert msg.statistics[4].data == 650000000.0
+
+
+# ── _check_cadvisor_connectivity ──────────────────────────────────────────────
+
+def test_diagnostics_error_before_first_success(node):
+    stat = node._check_cadvisor_connectivity(DiagnosticStatusWrapper())
+    assert stat.level == DiagnosticStatus.ERROR
+
+
+def test_diagnostics_ok_after_success(node):
+    node.last_success_time = node.get_clock().now()
+    node.consecutive_failures = 0
+
+    stat = node._check_cadvisor_connectivity(DiagnosticStatusWrapper())
+
+    assert stat.level == DiagnosticStatus.OK
+
+
+def test_diagnostics_warn_after_failure_following_a_success(node):
+    node.last_success_time = node.get_clock().now()
+    node.consecutive_failures = 3
+    node.last_error = "connection refused"
+
+    stat = node._check_cadvisor_connectivity(DiagnosticStatusWrapper())
+
+    assert stat.level == DiagnosticStatus.WARN
+    assert "connection refused" in stat.message
+
+
+def test_diagnostics_reports_consecutive_failures(node):
+    node.last_success_time = node.get_clock().now()
+    node.consecutive_failures = 5
+
+    stat = node._check_cadvisor_connectivity(DiagnosticStatusWrapper())
+
+    values = {kv.key: kv.value for kv in stat.values}
+    assert values["consecutive_failures"] == "5"
+
+
+def test_diagnostics_omits_last_success_before_any_success(node):
+    stat = node._check_cadvisor_connectivity(DiagnosticStatusWrapper())
+
+    keys = {kv.key for kv in stat.values}
+    assert "seconds_since_last_success" not in keys

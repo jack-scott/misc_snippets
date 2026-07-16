@@ -6,6 +6,8 @@ from rclpy.node import Node
 from rclpy.time import Time
 from builtin_interfaces.msg import Time as TimeMsg
 from statistics_msgs.msg import MetricsMessage, StatisticDataPoint
+import diagnostic_updater
+from diagnostic_msgs.msg import DiagnosticStatus
 
 from .cadvisor import CAdvisorClient, ContainerSummary
 
@@ -30,15 +32,15 @@ class ContainerStatsPublisher(Node):
         self.declare_parameter('name_refresh_interval', 30)  # seconds
 
         # Get parameters
-        cadvisor_url = self.get_parameter('cadvisor_url').get_parameter_value().string_value
+        self.cadvisor_url = self.get_parameter('cadvisor_url').get_parameter_value().string_value
         publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
         name_refresh = self.get_parameter('name_refresh_interval').get_parameter_value().integer_value
 
-        self.get_logger().info(f'Connecting to cAdvisor at {cadvisor_url}')
+        self.get_logger().info(f'Connecting to cAdvisor at {self.cadvisor_url}')
 
         # Initialize cAdvisor client
         self.client = CAdvisorClient(
-            base_url=cadvisor_url,
+            base_url=self.cadvisor_url,
             timeout=10,
             name_cache_ttl=name_refresh
         )
@@ -54,8 +56,16 @@ class ContainerStatsPublisher(Node):
 
         # Track window timing
         self.last_publish_time = self.get_clock().now()
-        # e = "a"
-        # r = e/2
+
+        # Diagnostics: reports cAdvisor connectivity health on /diagnostics
+        self.last_success_time = None
+        self.last_error = None
+        self.consecutive_failures = 0
+
+        self.updater = diagnostic_updater.Updater(self)
+        self.updater.setHardwareID(self.cadvisor_url)
+        self.updater.add('cAdvisor connectivity', self._check_cadvisor_connectivity)
+
         self.get_logger().info(f'Publishing container stats at {publish_rate} Hz')
 
     def _make_time_msg(self, ros_time: Time) -> TimeMsg:
@@ -166,10 +176,36 @@ class ContainerStatsPublisher(Node):
 
             self.get_logger().debug(f'Published stats for {len(summaries)} containers')
 
+            self.last_success_time = window_stop
+            self.last_error = None
+            self.consecutive_failures = 0
+
         except Exception as e:
+            self.consecutive_failures += 1
+            self.last_error = str(e)
             self.get_logger().error(f'Failed to fetch/publish stats: {e}')
 
         self.last_publish_time = window_stop
+
+    def _check_cadvisor_connectivity(self, stat):
+        """Report cAdvisor connectivity health for the /diagnostics topic."""
+        if self.last_success_time is None:
+            stat.summary(DiagnosticStatus.ERROR, 'No successful fetch from cAdvisor yet')
+        elif self.consecutive_failures > 0:
+            stat.summary(
+                DiagnosticStatus.WARN,
+                f'Last fetch failed ({self.consecutive_failures}x in a row): {self.last_error}'
+            )
+        else:
+            stat.summary(DiagnosticStatus.OK, 'Publishing container stats')
+
+        stat.add('cadvisor_url', self.cadvisor_url)
+        stat.add('consecutive_failures', str(self.consecutive_failures))
+        if self.last_success_time is not None:
+            seconds_since_success = (self.get_clock().now() - self.last_success_time).nanoseconds / 1e9
+            stat.add('seconds_since_last_success', f'{seconds_since_success:.1f}')
+
+        return stat
 
 
 def main(args=None):

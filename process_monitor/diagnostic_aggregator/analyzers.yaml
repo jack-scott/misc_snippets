@@ -1,0 +1,5 @@
+cadvisor_monitor:
+  type: diagnostic_aggregator/GenericAnalyzer
+  path: cAdvisor Monitor
+  contains: ['cAdvisor connectivity']
+  timeout: 5.0
