@@ -44,12 +44,14 @@ COPY --from=prod_build --chown=ubuntu:ubuntu /workspace/.pixi/envs/prod /workspa
 COPY --from=prod_build --chown=ubuntu:ubuntu /workspace/activate.sh /workspace/activate.sh
 COPY --from=prod_build --chown=ubuntu:ubuntu --chmod=0755 /workspace/entrypoint.sh /workspace/entrypoint.sh
 
-# diagnostic_aggregator analyzer config for the diagnostics this image's node
-# publishes on /diagnostics. A pre-launch step reads this label back out of
-# the image (`docker inspect`, unescaping \n) and merges it with the labels
-# from other node images into one diagnostic_aggregator config.
-# Keep this in sync with diagnostic_aggregator/analyzers.yaml.
-LABEL diagnostics.analyzers="cadvisor_monitor:\n  type: diagnostic_aggregator/GenericAnalyzer\n  path: cAdvisor Monitor\n  contains: ['cAdvisor connectivity']\n  timeout: 5.0\n"
+# This image's diagnostic_aggregator analyzer config, read back out by a
+# pre-launch step to build the full aggregator config for the whole compose
+# stack (see scripts/extract_diagnostics_labels.py). Supplied at build time
+# via --build-arg (compose.yaml's build.args) — Dockerfile's own instructions
+# can't read a file's content, so something outside the build must pass it in,
+# same as GIT_COMMIT-style labels.
+ARG DIAGNOSTICS_ANALYZERS=""
+LABEL diagnostics.analyzers=$DIAGNOSTICS_ANALYZERS
 
 USER ubuntu
 ENTRYPOINT ["/workspace/entrypoint.sh"]

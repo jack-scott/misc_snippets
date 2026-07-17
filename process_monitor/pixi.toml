@@ -21,10 +21,18 @@ colcon-common-extensions = "*"
 
 [feature.runtime.dependencies]
 ros-humble-ros2run = "*"
+ros-humble-diagnostic-aggregator = "*"
+# ros-humble-diagnostic-aggregator's own conda metadata is missing these two
+# transitive runtime deps of its compiled aggregator_node (upstream robostack
+# packaging gap) — pinned explicitly so aggregator_node can actually start,
+# both here (dev/test) and in the deployed prod image.
+ros-humble-class-loader = "*"
+console_bridge = "*"
 
 [feature.ci.dependencies]
 curl = "*"
 goss = "*"
+container-structure-test = "*"
 
 [feature.deploy.dependencies]
 # ---- Comment out either the local or remote to switch between trying the different sources ----
@@ -59,6 +67,19 @@ COMPOSE_FILE = "compose.yaml"
 GOSS_SLEEP = "5"
 GOSS_WAIT_OPTS = '-r 30s -s 1s'
 GOSS_OPTS = '--format documentation'
+[feature.test.tasks]
+build-test-ws = "colcon build --packages-select cadvisor_monitor"
+# Regular unit tests (tests/) via pytest.
+unit-test = { cmd = "bash -c 'source install/setup.bash && cd src/cadvisor_monitor && python3 -m pytest tests/ -v'", depends-on = [
+    "build-test-ws",
+] }
+# Integration test (launch_tests/) via the launch_test CLI, not pytest —
+# ros-humble-launch-testing's pytest plugin is incompatible with current
+# pytest (see setup.cfg), so this must run outside of it.
+integration-test = { cmd = "bash -c 'source install/setup.bash && launch_test src/cadvisor_monitor/launch_tests/test_diagnostics_integration.py'", depends-on = [
+    "build-test-ws",
+] }
+
 [feature.ci.tasks]
 # Compose-based smoketest: brings up the full stack from compose.yaml
 # (docker-compose.yaml symlinks to it) — cadvisor plus the cadvisor_monitor

@@ -1,0 +1,11 @@
+services:
+  diagnostic_aggregator:
+    image: cadvisor_prod:prod
+    depends_on:
+      - cadvisor_monitor
+    environment:
+      # Must see /diagnostics from other containers on the compose network.
+      - ROS_LOCALHOST_ONLY=0
+    volumes:
+      - ./diagnostic_aggregator/analyzers.generated.yaml:/config/analyzers.generated.yaml:ro
+    command: [ros2, run, diagnostic_aggregator, aggregator_node, --ros-args, --params-file, /config/analyzers.generated.yaml]

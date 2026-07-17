@@ -3,6 +3,8 @@ services:
     build:
       context: .
       target: prod
+      args:
+        DIAGNOSTICS_ANALYZERS: "${DIAGNOSTICS_ANALYZERS}"
     image: cadvisor_prod:latest
 
   dev:
