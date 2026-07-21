@@ -89,12 +89,20 @@ smoketest-compose = { cmd = """
     dcgoss run cadvisor_monitor
 """}
 
-# Asserts the built prod image's diagnostics label decodes to non-empty,
-# valid YAML — build it first with `bash docker/build.sh`. Not a
-# container-structure-test check: its metadataTest.labels only supports
-# exact key=value match, no existence-only or format check, so this uses
-# contents (../contents) instead — see scripts/check_diagnostics_label.py.
-container-check = "python3 scripts/check_diagnostics_label.py --pkg cadvisor_monitor --field diagnostics cadvisor_prod:prod"
+# Two-stage label check on the built prod image (build first with
+# `bash docker/build.sh`):
+#   1. container-structure-test asserts every expected io.ros.pkg label key
+#      is present and non-default (isRegex ".+" — rejects the Dockerfile
+#      ARG's empty-string default, e.g. an unset params build arg).
+#   2. Only once that passes: `contents decode` each field, which is where a
+#      present-and-non-empty-but-still-malformed value would fail —
+#      metadataTest can assert a label's raw string but can't shell out to
+#      actually decode/validate it.
+container-structure-check = "container-structure-test test --image cadvisor_prod:latest --config ci/container-structure-test.yaml"
+container-decode-check = { cmd = "bash -c 'set -e; for field in cmd diagnostics params; do contents decode --pkg cadvisor_monitor --field \"$field\" cadvisor_prod:latest > /dev/null && echo \"cadvisor_monitor/$field: OK\"; done'", depends-on = [
+    "container-structure-check",
+] }
+container-check = { depends-on = ["container-decode-check"] }
 
 [environments]
 default ={ features = ["test", "build", "runtime", "development"], solve-group = "main"}

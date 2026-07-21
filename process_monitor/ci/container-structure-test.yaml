@@ -1,0 +1,20 @@
+schemaVersion: "2.0.0"
+
+# Presence + non-default check for this image's io.ros.pkg.* labels: every
+# package must declare cmd, diagnostics, and params, and none of them may be
+# left at the Dockerfile ARG's empty-string default ("+" requires at least
+# one character). Deeper content validity (does the value actually decode?)
+# is deliberately not checked here — metadataTest can assert a label's value
+# but can't shell out to `contents decode`, so that check runs as a separate
+# CI step after this one passes (see pixi.toml's container-check task).
+metadataTest:
+  labels:
+    - key: "io.ros.pkg.cadvisor_monitor.cmd"
+      value: ".+"
+      isRegex: true
+    - key: "io.ros.pkg.cadvisor_monitor.diagnostics"
+      value: ".+"
+      isRegex: true
+    - key: "io.ros.pkg.cadvisor_monitor.params"
+      value: ".+"
+      isRegex: true
