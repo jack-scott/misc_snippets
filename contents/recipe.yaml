@@ -1,0 +1,30 @@
+package:
+  name: contents
+  version: "0.1.0"
+
+source:
+  path: .
+
+build:
+  number: 1
+  noarch: python
+  script: python -m pip install . --no-deps --no-build-isolation -vv
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools
+  run:
+    - python >=3.10
+    - docker-py
+    - pyyaml
+
+tests:
+  - script:
+      - contents --help
+
+about:
+  license: MIT
+  license_file: LICENSE
+  summary: Encode/decode a package's params and diagnostics YAML into deterministic image labels

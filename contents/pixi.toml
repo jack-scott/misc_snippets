@@ -1,0 +1,42 @@
+[workspace]
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["linux-64"]
+preview = ["pixi-build"]
+
+[package]
+name = "contents"
+version = "0.1.0"
+
+[package.build]
+backend = { name = "pixi-build-python", version = "*" }
+
+[package.host-dependencies]
+setuptools = "*"
+
+[dependencies]
+python = ">=3.10"
+docker-py = "*"
+pyyaml = "*"
+contents = { path = "." }
+
+[feature.test.dependencies]
+pytest = "*"
+
+[feature.test.tasks]
+test = "pytest tests/ -v"
+
+[feature.release.dependencies]
+# >=0.69 specifically: 0.55.1 had a server-side-facing bug where `publish`'s
+# upload half 500'd against prefix.dev even with working auth/channel; 0.69
+# uploads cleanly. Don't lower this bound without re-verifying `publish`.
+rattler-build = ">=0.69"
+
+[feature.release.tasks]
+build = "rattler-build build --recipe recipe.yaml -c conda-forge --output-dir output"
+publish = { cmd = "rattler-build publish recipe.yaml --to https://prefix.dev/{{ channel }} -c conda-forge --output-dir output", args = [
+    { arg = "channel", default = "jacks-channel" },
+] }
+
+[environments]
+default = { features = ["test"], solve-group = "default" }
+release = { features = ["release"], solve-group = "default" }

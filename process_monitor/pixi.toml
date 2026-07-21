@@ -62,7 +62,7 @@ publish = """
     pixi upload prefix --channel jacks-channel --api-key $PREFIX_AUTH *.conda
 """
 [feature.ci.activation.env]
-GOSS_FILES_PATH = "goss/cadvisor_monitor"
+GOSS_FILES_PATH = "ci/goss/cadvisor_monitor"
 COMPOSE_FILE = "compose.yaml"
 GOSS_SLEEP = "5"
 GOSS_WAIT_OPTS = '-r 30s -s 1s'
@@ -88,6 +88,13 @@ integration-test = { cmd = "bash -c 'source install/setup.bash && launch_test sr
 smoketest-compose = { cmd = """
     dcgoss run cadvisor_monitor
 """}
+
+# Asserts the built prod image's diagnostics label decodes to non-empty,
+# valid YAML — build it first with `bash docker/build.sh`. Not a
+# container-structure-test check: its metadataTest.labels only supports
+# exact key=value match, no existence-only or format check, so this uses
+# contents (../contents) instead — see scripts/check_diagnostics_label.py.
+container-check = "python3 scripts/check_diagnostics_label.py --pkg cadvisor_monitor --field diagnostics cadvisor_prod:prod"
 
 [environments]
 default ={ features = ["test", "build", "runtime", "development"], solve-group = "main"}

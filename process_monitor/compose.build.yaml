@@ -4,7 +4,7 @@ services:
       context: .
       target: prod
       args:
-        DIAGNOSTICS_ANALYZERS: "${DIAGNOSTICS_ANALYZERS}"
+        CADVISOR_MONITOR_DIAGNOSTICS: "${CADVISOR_MONITOR_DIAGNOSTICS}"
     image: cadvisor_prod:latest
 
   dev:

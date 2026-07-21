@@ -46,12 +46,12 @@ COPY --from=prod_build --chown=ubuntu:ubuntu --chmod=0755 /workspace/entrypoint.
 
 # This image's diagnostic_aggregator analyzer config, read back out by a
 # pre-launch step to build the full aggregator config for the whole compose
-# stack (see scripts/extract_diagnostics_labels.py). Supplied at build time
-# via --build-arg (compose.yaml's build.args) — Dockerfile's own instructions
-# can't read a file's content, so something outside the build must pass it in,
-# same as GIT_COMMIT-style labels.
-ARG DIAGNOSTICS_ANALYZERS=""
-LABEL diagnostics.analyzers=$DIAGNOSTICS_ANALYZERS
+# stack (see scripts/extract_diagnostics_labels.py, ../contents). Supplied at
+# build time via --build-arg (compose.yaml's build.args, docker/build.sh) —
+# Dockerfile's own instructions can't read a file's content, so something
+# outside the build must pass it in, same as GIT_COMMIT-style labels.
+ARG CADVISOR_MONITOR_DIAGNOSTICS=""
+LABEL io.ros.pkg.cadvisor_monitor.diagnostics=$CADVISOR_MONITOR_DIAGNOSTICS
 
 USER ubuntu
 ENTRYPOINT ["/workspace/entrypoint.sh"]

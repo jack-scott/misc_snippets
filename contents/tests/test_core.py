@@ -1,0 +1,75 @@
+import pytest
+
+from contents import core
+
+
+# ── env_var_name ──────────────────────────────────────────────────────────────
+
+def test_env_var_name_simple():
+    assert core.env_var_name("perception", "params") == "PERCEPTION_PARAMS"
+
+
+def test_env_var_name_replaces_non_alnum_with_underscore():
+    assert core.env_var_name("cadvisor-monitor", "diagnostics") == "CADVISOR_MONITOR_DIAGNOSTICS"
+
+
+# ── label_key ──────────────────────────────────────────────────────────────────
+
+def test_label_key():
+    assert core.label_key("cadvisor_monitor", "diagnostics") == "io.ros.pkg.cadvisor_monitor.diagnostics"
+
+
+# ── encode ─────────────────────────────────────────────────────────────────────
+
+def test_encode_raw64_default_scheme(tmp_path):
+    f = tmp_path / "analyzers.yaml"
+    f.write_text("cadvisor_monitor:\n  type: GenericAnalyzer\n")
+
+    value = core.encode(str(f))
+
+    assert value.startswith("raw64:")
+
+
+def test_encode_canon_uses_canon64_scheme(tmp_path):
+    f = tmp_path / "analyzers.yaml"
+    f.write_text("cadvisor_monitor:\n  type: GenericAnalyzer\n")
+
+    value = core.encode(str(f), canon=True)
+
+    assert value.startswith("canon64:")
+
+
+def test_encode_is_deterministic(tmp_path):
+    f = tmp_path / "analyzers.yaml"
+    f.write_text("cadvisor_monitor:\n  type: GenericAnalyzer\n")
+
+    assert core.encode(str(f)) == core.encode(str(f))
+    assert core.encode(str(f), canon=True) == core.encode(str(f), canon=True)
+
+
+# ── decode_value ───────────────────────────────────────────────────────────────
+
+def test_decode_value_round_trips_raw64(tmp_path):
+    f = tmp_path / "analyzers.yaml"
+    original = b"cadvisor_monitor:\n  type: GenericAnalyzer\n"
+    f.write_bytes(original)
+
+    value = core.encode(str(f))
+
+    assert core.decode_value(value) == original
+
+
+def test_decode_value_round_trips_canon64(tmp_path):
+    f = tmp_path / "analyzers.yaml"
+    f.write_bytes(b"cadvisor_monitor:\n  type: GenericAnalyzer\n")
+
+    value = core.encode(str(f), canon=True)
+    recovered = core.decode_value(value)
+
+    import yaml
+    assert yaml.safe_load(recovered) == {"cadvisor_monitor": {"type": "GenericAnalyzer"}}
+
+
+def test_decode_value_raises_on_missing_colon():
+    with pytest.raises(ValueError):
+        core.decode_value("no-colon-here")
