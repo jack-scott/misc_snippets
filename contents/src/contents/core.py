@@ -33,4 +33,26 @@ def decode_value(value: str) -> bytes:
 
 def decode(image_ref: str, pkg: str, field: str) -> bytes:
     labels = docker.from_env().images.get(image_ref).labels or {}
-    return decode_value(labels[label_key(pkg, field)])
+    value = labels[label_key(pkg, field)]
+    if field == "cmd":
+        # cmd is authored by hand in the Dockerfile as a plain string, never
+        # encoded by `encode` — read it back as-is, no scheme:base64 to undo.
+        return value.encode()
+    return decode_value(value)
+
+
+def list_packages(image_ref: str) -> dict[str, list[str]]:
+    """Return {pkg: [field, ...]} for every io.ros.pkg.<pkg>.<field> label on the image."""
+    labels = docker.from_env().images.get(image_ref).labels or {}
+    prefix = f"{LABEL_PREFIX}."
+
+    packages: dict[str, list[str]] = {}
+    for key in labels:
+        if not key.startswith(prefix):
+            continue
+        pkg, _, field = key[len(prefix):].rpartition(".")
+        if not pkg:
+            continue
+        packages.setdefault(pkg, []).append(field)
+
+    return packages

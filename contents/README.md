@@ -28,7 +28,7 @@ LABEL io.ros.pkg.cadvisor_monitor.diagnostics=$CADVISOR_MONITOR_DIAGNOSTICS
 docker build --build-arg CADVISOR_MONITOR_DIAGNOSTICS="$(pixi run contents encode --pkg cadvisor_monitor --field diagnostics config/analyzers.yaml | cut -d= -f2-)" .
 ```
 
-Decode it back out of a built image (reads labels via the Docker SDK, prints the original YAML bytes to stdout):
+Decode it back out of a built image (reads labels via the Docker SDK, prints the original bytes to stdout):
 
 ```
 pixi run contents decode --pkg cadvisor_monitor --field diagnostics my-image:latest
@@ -36,6 +36,14 @@ pixi run contents decode --pkg cadvisor_monitor --field diagnostics my-image:lat
 
 Use `--canon` on `encode` to canonicalize formatting (drops comments, sorts keys) instead of an exact byte round-trip.
 
+List what's on an image — packages, or a package's fields:
+
+```
+pixi run contents list my-image:latest                       # package names
+pixi run contents list -v my-image:latest                    # packages with their fields
+pixi run contents list cadvisor_monitor my-image:latest       # that package's fields
+```
+
 ## Fields
 
-`--field` is `params` or `diagnostics`. `cmd` is a third label a package may carry, but it's authored by hand in the Dockerfile — `contents` doesn't touch it.
+`--field` is `params` or `diagnostics` for `encode`; `decode` also accepts `cmd`. `cmd` is authored by hand in the Dockerfile as a plain string (not YAML) — `contents` can read it back but never encodes it from a file.

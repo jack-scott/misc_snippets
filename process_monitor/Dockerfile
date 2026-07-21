@@ -50,6 +50,9 @@ COPY --from=prod_build --chown=ubuntu:ubuntu --chmod=0755 /workspace/entrypoint.
 # build time via --build-arg (compose.yaml's build.args, docker/build.sh) —
 # Dockerfile's own instructions can't read a file's content, so something
 # outside the build must pass it in, same as GIT_COMMIT-style labels.
+LABEL io.ros.pkg.cadvisor_monitor.cmd="ros2 run cadvisor_monitor container_stats_publisher"
+ARG CADVISOR_MONITOR_PARAMS=""
+LABEL io.ros.pkg.cadvisor_monitor.params=$CADVISOR_MONITOR_PARAMS
 ARG CADVISOR_MONITOR_DIAGNOSTICS=""
 LABEL io.ros.pkg.cadvisor_monitor.diagnostics=$CADVISOR_MONITOR_DIAGNOSTICS
 

@@ -5,6 +5,7 @@ services:
       target: prod
       args:
         CADVISOR_MONITOR_DIAGNOSTICS: "${CADVISOR_MONITOR_DIAGNOSTICS}"
+        CADVISOR_MONITOR_PARAMS: "${CADVISOR_MONITOR_PARAMS}"
     image: cadvisor_prod:latest
 
   dev:
